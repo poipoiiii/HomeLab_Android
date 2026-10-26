@@ -1,0 +1,30 @@
+# 缓存与中间产物（AGENTS.md 约定：.cache 可随时删除）
+.cache/
+
+# 本地工具链 / IDE 配置
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+kotlin-js-store/
+
+# 签名文件与密钥（禁止入库）
+*.keystore
+*.jks
+keystore/
+
+# 安装包与构建产物
+*.apk
+*.aab
+base.apk.1
+
+# 系统与日志
+.DS_Store
+Thumbs.db
+*.log
