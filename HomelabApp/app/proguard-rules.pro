@@ -1,9 +1,9 @@
 # 保留 kotlinx.serialization 生成的序列化器
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.**
--keepclassmembers class com.rong.homelab.data.** {
+-keepclassmembers class com.poi.homelab.data.** {
     *** Companion;
 }
--keepclasseswithmembers class com.rong.homelab.data.** {
+-keepclasseswithmembers class com.poi.homelab.data.** {
     kotlinx.serialization.KSerializer serializer(...);
 }

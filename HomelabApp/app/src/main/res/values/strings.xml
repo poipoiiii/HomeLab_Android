@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">poi的实验室</string>
+    <string name="app_name">poi\'s home</string>
+    <string name="accessibility_service_description">让 AI 助手在你要求时读取当前界面，并执行点击、输入和滚动。它不会在后台自动操作，关闭此项即可随时停用。</string>
 </resources>
