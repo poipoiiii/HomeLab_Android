@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,6 +7,13 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.devtools.ksp")
 }
+
+// 实例地址不写进仓库：在 local.properties 里加 homarr.url=https://xxx.ts.net 即可作为默认值预填。
+// local.properties 已被 .gitignore 排除，每台开发机自己维护。
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val defaultHomarrUrl = localProperties.getProperty("homarr.url").orEmpty().trim()
 
 android {
     namespace = "com.poi.homelab"
@@ -20,6 +29,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("String", "DEFAULT_HOMARR_URL", "\"$defaultHomarrUrl\"")
     }
 
     signingConfigs {
@@ -75,6 +85,9 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Homarr 看板磁贴图标（PNG/SVG），统一走本地 ImageLoader，不依赖 CDN 之外的 WebView
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-svg:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.adk:google-adk-kotlin-core-android:1.4.0")

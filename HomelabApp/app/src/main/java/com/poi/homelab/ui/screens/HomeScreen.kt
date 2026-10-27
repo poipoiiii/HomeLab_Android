@@ -1,5 +1,8 @@
 package com.poi.homelab.ui.screens
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.poi.homelab.R
@@ -40,6 +44,7 @@ import com.poi.homelab.ui.components.DailyChecklistCard
 import com.poi.homelab.ui.components.DarkCard
 import com.poi.homelab.ui.components.DarkStat
 import com.poi.homelab.ui.components.EmptyState
+import com.poi.homelab.ui.components.HomarrBoardGrid
 import com.poi.homelab.ui.components.InlineAction
 import com.poi.homelab.ui.components.LoadingRow
 import com.poi.homelab.ui.components.PrimaryButton
@@ -56,6 +61,7 @@ import com.poi.homelab.ui.theme.SuccessStrong
 import com.poi.homelab.util.money
 import com.poi.homelab.util.stateLabel
 import com.poi.homelab.util.todayLabel
+import java.net.URI
 
 @Composable
 fun HomeScreen(
@@ -69,6 +75,7 @@ fun HomeScreen(
     onSaveTodos: (List<TodoItem>) -> Unit,
 ) {
     val settings = state.settings
+    val context = LocalContext.current
     val needsSetup = settings.labUrl.isBlank() && settings.billUrl.isBlank()
     val todoItems = state.todos.map { ChecklistItem(it.id, it.label) }
     var todoEditorOpen by rememberSaveable { mutableStateOf(false) }
@@ -260,27 +267,68 @@ fun HomeScreen(
             }
         }
 
-        item {
-            SectionHeader(
-                title = "快捷入口",
-                subtitle = "左右滑动切换，点卡片进入",
-            )
-        }
-        item {
-            QuickEntryPager(
-                cards = listOf(
-                    StackCard("账本明细", "本月流水与分类"),
-                    StackCard("下载队列", "提交 MeTube 任务"),
-                    StackCard("实验室服务", "容器启停与日志"),
-                ),
-                onCardClick = { index ->
-                    when (index) {
-                        0 -> onOpenBills()
-                        1 -> onOpenDownloads()
-                        else -> onOpenServices()
+        if (settings.homarrUrl.isNotBlank()) {
+            item {
+                SectionHeader(
+                    title = state.board?.name?.takeIf { it.isNotBlank() } ?: "看板",
+                    subtitle = if (state.loadingBoard && state.board == null) "正在同步 Homarr" else "来自 Homarr",
+                    action = { InlineAction("刷新", onRefresh) },
+                )
+            }
+            item {
+                val board = state.board
+                val boardError = state.boardError
+                when {
+                    board != null -> HomarrBoardGrid(
+                        board = board,
+                        apps = state.boardApps,
+                        baseUrl = settings.homarrUrl,
+                        onOpen = { url ->
+                            // 账本磁贴直接进原生账单页，其余交给浏览器
+                            if (settings.billUrl.isNotBlank() && sameOrigin(url, settings.billUrl)) {
+                                onOpenBills()
+                            } else {
+                                openInBrowser(context, url)
+                            }
+                        },
+                    )
+                    state.loadingBoard -> CreamCard { LoadingRow("正在读取 Homarr 看板…") }
+                    boardError != null -> CreamCard {
+                        Text("看板没加载出来", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = boardError,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        InlineAction("重试", onRefresh)
                     }
-                },
-            )
+                    else -> CreamCard { EmptyState("看板没有返回数据") }
+                }
+            }
+        } else {
+            item {
+                SectionHeader(
+                    title = "快捷入口",
+                    subtitle = "左右滑动切换，点卡片进入",
+                )
+            }
+            item {
+                QuickEntryPager(
+                    cards = listOf(
+                        StackCard("账本明细", "本月流水与分类"),
+                        StackCard("下载队列", "提交 MeTube 任务"),
+                        StackCard("实验室服务", "容器启停与日志"),
+                    ),
+                    onCardClick = { index ->
+                        when (index) {
+                            0 -> onOpenBills()
+                            1 -> onOpenDownloads()
+                            else -> onOpenServices()
+                        }
+                    },
+                )
+            }
         }
 
         if (settings.showLedgerOnHome) {
@@ -312,3 +360,25 @@ fun HomeScreen(
     }
     }
 }
+
+private fun openInBrowser(context: Context, url: String) {
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+}
+
+/** 用 scheme + host + port 比较，判断看板磁贴和已配置服务是不是同一个入口。 */
+private fun sameOrigin(first: String, second: String): Boolean {
+    val a = originOf(first) ?: return false
+    val b = originOf(second) ?: return false
+    return a == b
+}
+
+private fun originOf(value: String): String? = runCatching {
+    val uri = URI(value.trim())
+    val host = uri.host ?: return@runCatching null
+    val port = if (uri.port == -1) {
+        if (uri.scheme.equals("https", true)) 443 else 80
+    } else {
+        uri.port
+    }
+    "${uri.scheme?.lowercase()}://${host.lowercase()}:$port"
+}.getOrNull()

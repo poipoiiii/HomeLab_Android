@@ -83,6 +83,9 @@ fun SettingsScreen(
     val context = LocalContext.current
     var labUrl by rememberSaveable(settings.labUrl) { mutableStateOf(settings.labUrl) }
     var billUrl by rememberSaveable(settings.billUrl) { mutableStateOf(settings.billUrl) }
+    var homarrUrl by rememberSaveable(settings.homarrUrl) { mutableStateOf(settings.homarrUrl) }
+    var homarrApiKey by rememberSaveable(settings.homarrApiKey) { mutableStateOf(settings.homarrApiKey) }
+    var homarrBoard by rememberSaveable(settings.homarrBoard) { mutableStateOf(settings.homarrBoard) }
     var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
     var deviceName by rememberSaveable(settings.deviceName) { mutableStateOf(settings.deviceName) }
     var wallpaperOpacity by remember(settings.wallpaperOpacity) {
@@ -332,6 +335,41 @@ fun SettingsScreen(
                 )
 
                 Text(
+                    "Homarr",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 18.dp),
+                )
+                SettingHint(
+                    "看板来源。填 tailnet 入口即可（如 https://xxx.ts.net），首页的快捷入口会换成这块看板。",
+                    detailed,
+                    Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                OutlinedTextField(
+                    value = homarrUrl,
+                    onValueChange = { homarrUrl = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("https://xxx.ts.net") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = homarrApiKey,
+                    onValueChange = { homarrApiKey = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    placeholder = { Text("API Key（管理 → Tools → API）") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = homarrBoard,
+                    onValueChange = { homarrBoard = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    placeholder = { Text("看板名，留空自动用首页看板") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+
+                Text(
                     "Bearer Token（可选）",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 18.dp),
@@ -380,6 +418,9 @@ fun SettingsScreen(
                             settings.copy(
                                 labUrl = labUrl.trim(),
                                 billUrl = billUrl.trim(),
+                                homarrUrl = homarrUrl.trim(),
+                                homarrApiKey = homarrApiKey.trim(),
+                                homarrBoard = homarrBoard.trim(),
                                 token = token.trim(),
                                 deviceName = deviceName.trim(),
                             ),

@@ -14,6 +14,8 @@ import com.poi.homelab.data.CalendarEntry
 import com.poi.homelab.data.ChatMessage
 import com.poi.homelab.data.DEFAULT_LAB_URL
 import com.poi.homelab.data.HealthSnapshot
+import com.poi.homelab.data.HomarrApp
+import com.poi.homelab.data.HomarrBoard
 import com.poi.homelab.data.TodoItem
 import com.poi.homelab.data.defaultTodoItems
 import com.poi.homelab.data.requiresKey
@@ -75,6 +77,10 @@ data class UiState(
     val checkedToday: Set<String> = emptySet(),
     val todos: List<TodoItem> = defaultTodoItems,
     val calendarEntries: List<CalendarEntry> = emptyList(),
+    val board: HomarrBoard? = null,
+    val boardApps: List<HomarrApp> = emptyList(),
+    val loadingBoard: Boolean = false,
+    val boardError: String? = null,
 )
 
 class MainViewModel(private val app: AppContainer) : ViewModel() {
@@ -116,6 +122,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 _state.update { it.copy(settings = value) }
                 if (!bootstrapped &&
                     (value.billUrl.isNotBlank() ||
+                        value.homarrUrl.isNotBlank() ||
                         (value.labUrl.isNotBlank() && value.labUrl != DEFAULT_LAB_URL))
                 ) {
                     bootstrapped = true
@@ -128,6 +135,55 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
     fun refreshAll() {
         refreshHealth()
         refreshBills()
+        refreshBoard()
+    }
+
+    /** 看板内容没有 REST GET，只能走 tRPC；app 列表单独取，两路并行。 */
+    fun refreshBoard() {
+        val settings = _state.value.settings
+        if (settings.homarrUrl.isBlank() || settings.homarrApiKey.isBlank()) {
+            _state.update {
+                it.copy(
+                    board = null,
+                    boardApps = emptyList(),
+                    loadingBoard = false,
+                    boardError = null,
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(loadingBoard = true, boardError = null) }
+            runCatching {
+                coroutineScope {
+                    // app 列表需要 Modify all apps 权限；拿不到时降级成只有布局、图标显示首字，不连累整块看板
+                    val apps = async {
+                        runCatching { app.homarr.apps(settings.homarrUrl, settings.homarrApiKey) }
+                            .getOrDefault(emptyList())
+                    }
+                    val board = async { loadBoard(settings) }
+                    board.await() to apps.await()
+                }
+            }.onSuccess { (board, apps) ->
+                _state.update {
+                    it.copy(board = board, boardApps = apps, loadingBoard = false, boardError = null)
+                }
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(loadingBoard = false, boardError = readable(error))
+                }
+            }
+        }
+    }
+
+    private suspend fun loadBoard(settings: AppSettings): HomarrBoard {
+        val name = settings.homarrBoard.trim().ifBlank {
+            val boards = app.homarr.boards(settings.homarrUrl, settings.homarrApiKey)
+            boards.firstOrNull { it.isHome }?.name
+                ?: boards.firstOrNull()?.name
+                ?: throw IOException("Homarr 里没有可访问的看板")
+        }
+        return app.homarr.board(settings.homarrUrl, settings.homarrApiKey, name)
     }
 
     fun refreshHealth() {
@@ -660,6 +716,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             _state.update { it.copy(settings = value, connectionTest = null) }
             if (value.labUrl.isNotBlank()) refreshHealth()
             if (value.billUrl.isNotBlank()) refreshBills()
+            if (value.homarrUrl.isNotBlank()) refreshBoard()
         }
     }
 
@@ -673,8 +730,8 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
 
     fun testConnections() {
         val settings = _state.value.settings
-        if (settings.labUrl.isBlank() && settings.billUrl.isBlank()) {
-            _state.update { it.copy(message = "先把两个地址填上再测试") }
+        if (settings.labUrl.isBlank() && settings.billUrl.isBlank() && settings.homarrUrl.isBlank()) {
+            _state.update { it.copy(message = "先把地址填上再测试") }
             return
         }
         viewModelScope.launch {
@@ -689,6 +746,11 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 runCatching { app.lab.listServices(settings.labUrl) }
                     .onSuccess { lines += "Lab Tools：正常，${it.size} 个容器" }
                     .onFailure { lines += "Lab Tools：${readable(it)}" }
+            }
+            if (settings.homarrUrl.isNotBlank()) {
+                runCatching { app.homarr.boards(settings.homarrUrl, settings.homarrApiKey) }
+                    .onSuccess { lines += "Homarr：正常，${it.size} 个看板" }
+                    .onFailure { lines += "Homarr：${readable(it)}" }
             }
             _state.update { it.copy(connectionTest = lines.joinToString("\n")) }
         }

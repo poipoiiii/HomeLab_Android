@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.poi.homelab.BuildConfig
 import java.io.IOException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -31,6 +32,9 @@ const val DEFAULT_LAB_URL = ""
 data class AppSettings(
     val labUrl: String = DEFAULT_LAB_URL,
     val billUrl: String = "",
+    val homarrUrl: String = "",
+    val homarrApiKey: String = "",
+    val homarrBoard: String = "",
     val token: String = "",
     val deviceName: String = Build.MODEL.orEmpty(),
     val themeMode: String = "system",
@@ -49,6 +53,11 @@ class SettingsStore(private val context: Context) {
     private object Keys {
         val LAB_URL = stringPreferencesKey("lab_url")
         val BILL_URL = stringPreferencesKey("bill_url")
+        val HOMARR_URL = stringPreferencesKey("homarr_url")
+        val HOMARR_API_KEY = stringPreferencesKey("homarr_api_key")
+        val HOMARR_BOARD = stringPreferencesKey("homarr_board")
+        // 区分「从没配过」和「用户主动清空」：前者用 local.properties 注入的默认值，后者尊重空值
+        val HOMARR_URL_TOUCHED = booleanPreferencesKey("homarr_url_touched")
         val TOKEN = stringPreferencesKey("api_token")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -74,6 +83,13 @@ class SettingsStore(private val context: Context) {
             AppSettings(
                 labUrl = prefs[Keys.LAB_URL]?.takeIf { it.isNotBlank() } ?: DEFAULT_LAB_URL,
                 billUrl = prefs[Keys.BILL_URL].orEmpty(),
+                homarrUrl = if (prefs[Keys.HOMARR_URL_TOUCHED] == true) {
+                    prefs[Keys.HOMARR_URL].orEmpty()
+                } else {
+                    BuildConfig.DEFAULT_HOMARR_URL
+                },
+                homarrApiKey = prefs[Keys.HOMARR_API_KEY].orEmpty(),
+                homarrBoard = prefs[Keys.HOMARR_BOARD].orEmpty(),
                 token = prefs[Keys.TOKEN].orEmpty(),
                 deviceName = prefs[Keys.DEVICE_NAME] ?: Build.MODEL.orEmpty(),
                 themeMode = prefs[Keys.THEME_MODE] ?: "system",
@@ -94,6 +110,10 @@ class SettingsStore(private val context: Context) {
         context.homelabDataStore.edit { prefs ->
             prefs[Keys.LAB_URL] = value.labUrl.trim()
             prefs[Keys.BILL_URL] = value.billUrl.trim()
+            prefs[Keys.HOMARR_URL] = value.homarrUrl.trim()
+            prefs[Keys.HOMARR_URL_TOUCHED] = true
+            prefs[Keys.HOMARR_API_KEY] = value.homarrApiKey.trim()
+            prefs[Keys.HOMARR_BOARD] = value.homarrBoard.trim()
             prefs[Keys.TOKEN] = value.token.trim()
             prefs[Keys.DEVICE_NAME] = value.deviceName.trim()
             prefs[Keys.THEME_MODE] = value.themeMode
