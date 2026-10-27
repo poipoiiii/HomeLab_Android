@@ -31,4 +31,5 @@ class AppContainer(context: android.content.Context) {
     val lab = LabRepository(mcp, json)
     val bill = BillRepository(http, json)
     val homarr = HomarrRepository(http, json)
+    val cloudreve = CloudreveRepository(http)
 }

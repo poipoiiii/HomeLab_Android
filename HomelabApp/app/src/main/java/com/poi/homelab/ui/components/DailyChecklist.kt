@@ -57,7 +57,7 @@ fun DailyChecklistCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Todo", style = MaterialTheme.typography.titleMedium)
+                Text("今天", style = MaterialTheme.typography.titleMedium)
                 Text(
                     text = if (items.isEmpty()) {
                         "还没有事项，点编辑添加"

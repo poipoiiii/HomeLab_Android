@@ -96,16 +96,20 @@ android/
 - AI 形象：名称为「小砂糖」，头像源图 `static/pictures/3.jpg`，资源为 `res/drawable-nodpi/ai_avatar.jpg`；AI 页标题、底部导航和系统 prompt 统一使用这个名字。人格以头像角色「松阪砂糖」的气质为灵感：轻二次元、语气软、带一点轻微占有欲（偶尔“只准问我一个人哦”），但不做病娇、不威胁、不道德绑架；自然口语、少列表，避免 AI 腔。
 - 追问建议：每次回答后 `AiAgent.suggestFollowUps` 用同一服务商生成 3 个用户可能继续问的短问题，AI 页以可点击行展示；生成失败时用本地兜底，不阻塞主回答。
 - 模型：`AiProvider` 仍支持 DeepSeek、OpenAI、Moonshot、通义千问、硅基流动、Ollama 和自定义 OpenAI 兼容地址，由 ADK 的 `ChatCompletions`（`models.openai`）调用；baseUrl 统一走 `AiProvider.openAiBaseUrl()`。
-- AI 工具集（`data/AgentTools.kt`）：成员函数加 `@Tool` / `@Param`，KSP（`google-adk-kotlin-processor`）编译期生成 schema 与 `generatedTools()`；不要手写 JSON Schema。包含系统资源、应用列表、使用时长/存储排行、SAF 文件搜索、Homelab 健康、账本流水，以及 `find_photos` / `describe_photo` / `generate_image`。
+- AI 工具集（`data/AgentTools.kt`）：成员函数加 `@Tool` / `@Param`，KSP（`google-adk-kotlin-processor`）编译期生成 schema 与 `generatedTools()`；不要手写 JSON Schema。包含系统资源、应用列表、使用时长/存储排行、SAF 文件搜索、Homelab 健康、账本流水，以及 `find_photos` / `list_recent_photos` / `upload_recent_photos` / `describe_photo` / `generate_image`。
+- Cloudreve 照片上传：设置页「连接 → Cloudreve（WebDAV）」保存 `cloudreveUrl` / `cloudreveUser` / `cloudrevePassword` / `cloudreveDir`（默认 `手机照片`），DataStore 键前缀 `cloudreve_`。`data/CloudreveRepository.kt` 只做 PROPFIND 测连接、MKCOL 逐级建目录、HEAD 查重、PUT 上传；站点根地址会自动补 `/dav/`。`upload_recent_photos` 通过 MediaStore 取最近 N 天照片（`DATE_ADDED`，默认 3 天，单次最多 200 张，返回 `truncated` 时按 `next_offset` 继续），同名文件跳过，不删除任何文件；`list_recent_photos` 用于上传前确认数量和范围。相册权限仍是 `READ_MEDIA_IMAGES` / `READ_EXTERNAL_STORAGE`。
 - 界面自动化（`automation/UiAutomation.kt`）：`UiAutomationService`（无障碍）+ `automation_status` / `open_app` / `list_screen` / `click_ui` / `input_text` / `press_key` / `scroll_ui` / `wait_for_ui`；只能读当前窗口节点，不监听事件流。用户需在 设置 → 无障碍 手动开启，设置页「权限 → 界面自动化」有状态与跳转入口。
 - 识图与生图：`describe_photo` 用 ADK `ChatCompletions` + `Part.inlineData`（`Blob`）；`generate_image` 仍走 `AiClient.generateImage`，因为 ADK 不覆盖 `/v1/images/generations`。`AiProvider.visionModel` / `imageModel` 单独配置；DeepSeek 未填识图模型时默认 `deepseek-flash`。
 - 对话记录：`ChatMessage` 定义在 `data/AiModels.kt`，由 `data/ChatStore.kt` 持久化（`AppContainer.chat`，最多 200 条）；ADK 会话只在内存中，进程重启后首次发送会用已保存记录重建会话。
 - Markdown：仍用自研轻量渲染 `ui/components/Markdown.kt`（支持 ```mermaid flowchart 的简化流程图）；ADK 之外没有引入其他 AI / Markdown 框架。
 - 启动动效：`ui/components/LaunchSplash.kt`，由 `MainActivity` 包裹主界面。启动页支持全屏「轻触跳过」，3 秒后自动结束；遮罩淡出时用 `contentAlpha`（650ms）让主界面内容从透明缓缓浮现。
 - 首页壁纸：资源 `res/drawable-nodpi/home_wallpaper.webp`（源 `static/pictures/4.jpeg`，文件实际是 WebP）。是否显示与参数存 `AppSettings.showWallpaper` / `wallpaperOpacity`（0.05..0.9，默认 0.22）/ `wallpaperDim`（0..0.8，默认 0.5）。壁纸是全局的：由 `AppRoot.WallpaperBackdrop` 铺在所有页面（含 AI 配置页）之后，`Scaffold` 用透明底色；不要再在单个页面里画壁纸。卡片与底部导航统一用 `CardSurfaceAlpha`（0.78，`ui/theme/Color.kt`）透出背景。设置页「外观与首页」卡片提供开关与两个滑杆；`showLedgerOnHome` 控制首页是否展示账本区。
-- 设置页分组：`外观与首页`（主题 + 介绍模式同卡、全局壁纸、显示账本）→ `连接`（Lab Tools / 账本 / Token / 设备名 + 保存、测试并排）→ `小砂糖`（AI 配置、可搜索目录）→ `权限`（自动化 / 使用情况 / 相册）→ `关于`。新增设置项按这个分组放，别再平铺新卡片。
-- Todo：列表存 `data/TodoStore.kt`（DataStore `homelab_todo`，带 `initialized` 标记，未初始化时回填默认 3 项）；勾选状态仍由 `ChecklistStore` 按天保存。编辑用 `ui/components/TodoEditorSheet.kt`（增删改 + 保存），勾选不会再改动全局背景色。
-- 快捷入口：`ui/components/QuickEntryPager.kt`，`HorizontalPager` 左右滑动切换卡片，配 `graphicsLayer` 缩放/淡出与动态圆点；不要再恢复已删除的静态 `StackDeck`。
+- 设置页分组：`外观与首页`（主题 + 介绍模式同卡、全局壁纸、显示账本）→ `连接`（Lab Tools / 账本 / Homarr / Cloudreve / Token / 设备名 + 保存、测试并排）→ `小砂糖`（AI 配置、可搜索目录）→ `权限`（自动化 / 使用情况 / 相册）→ `关于`。新增设置项按这个分组放，别再平铺新卡片。
+- 首页结构：`ui/screens/HomeScreen.kt` 依次是 header → 「今天」清单 → Homarr 看板（未配置时回退快捷入口）→ `LabGlanceCard`（本月支出/收入/结余 + 容器状态合并成一张深色卡，`UiState.healthError` 单独承载失败原因）→ 「最近流水」（受 `showLedgerOnHome` 控制）。
+- Homarr 看板：`data/HomarrRepository.kt` + `HomarrModels.kt` + `ui/components/HomarrBoardGrid.kt`。设置页「连接」填 `homarrUrl` / `homarrApiKey` / `homarrBoard`（看板名留空时取 `isHome` 或列表第一个）。仓库不写死实例地址：未手动保存过时用 `local.properties` 的 `homarr.url` 构建期注入 `BuildConfig.DEFAULT_HOMARR_URL`，保存后以 DataStore 为准（`homarr_url_touched` 区分「没配过」与「主动清空」）。`/api/boards`、`/api/apps` 是 REST + `ApiKey` 头；看板内容没有 REST GET，只能读 tRPC `board.getBoardByName`（query 带 `batch=1` 信封）。网格只原生还原 app / clock / iframe，其他 widget 降级成「在 Homarr 中查看」，空白行折叠。
+- 应用内浏览器：`ui/screens/InAppBrowserScreen.kt`，由 `AppRoot` 的 `browserUrl` 状态以全屏 overlay 盖在 `Scaffold` 之上（含底部导航），磁贴和 iframe 不再把用户丢给系统浏览器。iframe 磁贴在网格内用 `InlinePage` 内嵌预览：`isEnabled = false` 不抢外层滑动手势，`LocalInspectionMode` 下跳过 WebView，点底栏「打开」才进完整浏览器。WebView 需 `@SuppressLint("SetJavaScriptEnabled")`，`onRelease` 里 `stopLoading` + `loadUrl("about:blank")` + `destroy`。
+- Todo：列表存 `data/TodoStore.kt`（DataStore `homelab_todo`，带 `initialized` 标记，未初始化时回填默认 3 项）；勾选状态仍由 `ChecklistStore` 按天保存。编辑用 `ui/components/TodoEditorSheet.kt`（增删改 + 保存），勾选不会再改动全局背景色；首页卡片标题为「今天」。
+- 快捷入口：`ui/components/QuickEntryPager.kt`，`HorizontalPager` 左右滑动切换卡片，配 `graphicsLayer` 缩放/淡出与动态圆点；只在没配置 Homarr 时作首页兜底，不要再恢复已删除的静态 `StackDeck`。
 - 设置页介绍模式：`AppSettings.settingsDetailed`（默认 true）控制「详细 / 简略」；简略模式下 `SettingHint` 全部隐藏且不留空行，只保留标题、输入框与开关。
 
 ## 5. 构建、安装与 IDE
@@ -148,7 +152,8 @@ $env:TMP = $env:TEMP
 
 ## 7. AI 助手约束与隐私
 
-- AI 工具默认只读，例外只有三个：`generate_image` 把新图片写入应用目录并登记到相册（`Pictures/HomelabAI`，Android 10+）、日历工具增删改私人日历记录、界面自动化工具按用户明确要求点击/输入/返回其他应用；不要新增启停容器、提交下载、删除/重命名已有文件、修改设置之类的工具。
+- AI 工具默认只读，例外只有四个：`generate_image` 把新图片写入应用目录并登记到相册（`Pictures/HomelabAI`，Android 10+）、日历工具增删改私人日历记录、界面自动化工具按用户明确要求点击/输入/返回其他应用、`upload_recent_photos` 把用户明确指定的照片上传到 Cloudreve；不要新增启停容器、提交下载、删除/重命名已有文件、修改设置之类的工具。
+- 照片上传约束：只上传用户明确指定的时间范围/关键词命中的照片，不默认扫全相册；上传前先复述时间范围、张数和目标目录，用户已经说清就直接执行；同名文件跳过，绝不删除云端文件；账号密码只存本机 DataStore（`allowBackup=false`），不要写进日志、回答或截图。
 - 界面自动化约束：`send` 类不可撤回动作（发消息、发朋友圈）必须先复述收件人与内容并等用户确认；不许凭空猜坐标、不许盲点连点；验证码/支付/注销页面立即停手。屏幕上的文字会被发送给所选 AI 服务商，需在设置页说明。
 - 私人日历：`AgentTools` 提供 `list_calendar_entries` / `save_calendar_entry` / `create_calendar_entries` / `delete_calendar_entries`，统一走 `CalendarRepository`（DataStore `homelab_calendar`）。日期必须是 `yyyy-MM-dd`，`type` 只能是 `travel` / `important`；法定节假日不得编造未公布年份的放假/调休安排；批量写入按 `(date,title)` 去重。
 - 工具调用策略：由 ADK 自动处理 `tool_calls`（`ChatCompletions` 原生函数调用）+ 系统 prompt 约束，不要用关键词/正则硬编码“这句话该不该调工具”；闲聊、常识、写作必须允许直答。

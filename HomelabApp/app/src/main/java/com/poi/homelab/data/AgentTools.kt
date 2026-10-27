@@ -12,7 +12,13 @@ import com.google.adk.kt.types.HttpOptions
 import com.google.adk.kt.types.Part
 import com.google.adk.kt.types.Role
 import com.poi.homelab.automation.UiAutomation
+import com.poi.homelab.util.hasPhotoAccess
+import com.poi.homelab.util.photoPermission
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.toList
@@ -28,8 +34,9 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
 /**
- * 交给 ADK 的本地只读工具集。
+ * 交给 ADK 的本地工具集。
  *
+ * 默认只读；写操作只有生图入相册、私人日历，以及把用户明确指定的照片上传到 Cloudreve。
  * 工具名、参数说明由 KSP 在编译期生成 schema，不再手写 JSON Schema 和工具循环。
  */
 class AgentTools(
@@ -38,6 +45,7 @@ class AgentTools(
     private val lab: LabRepository,
     private val bill: BillRepository,
     private val calendar: CalendarRepository,
+    private val cloudreve: CloudreveRepository,
     private val settings: AppSettings,
     private val provider: AiProvider,
     private val ai: AiClient,
@@ -47,6 +55,9 @@ class AgentTools(
         ignoreUnknownKeys = true
         isLenient = true
     }
+
+    private val photoTime: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
 
     @Tool(
         name = "get_system_resources",
@@ -119,6 +130,125 @@ class AgentTools(
             limit = (limit ?: 8).coerceIn(1, 20),
         ).toPlainMap()
     }
+
+    @Tool(
+        name = "list_recent_photos",
+        description = "列出最近 N 天加入相册的照片（uri、文件名、相册、时间、大小），只读。" +
+            "上传前可以用它确认张数和范围；需要用户先在 设置 → 权限 里授权相册。",
+    )
+    suspend fun listRecentPhotos(
+        @Param("最近 N 天，默认 3，0 表示不限") sinceDays: Int? = null,
+        @Param("可选，文件名或相册名关键词，如 截图、微信") query: String? = null,
+        @Param("返回条数，默认 30，最大 100") limit: Int? = null,
+    ): Map<String, Any?> = safely {
+        if (!hasPhotoAccess(context)) {
+            return@safely mapOf(
+                "error" to "没有相册读取权限，请到 设置 → 权限 里授权相册",
+                "need_permission" to photoPermission,
+            )
+        }
+        val days = (sinceDays ?: 3).coerceIn(0, 3650)
+        val photos = device.recentPhotos(query.orEmpty(), days, (limit ?: 30).coerceIn(1, 100))
+        mapOf(
+            "since_days" to days,
+            "query" to query.orEmpty().trim(),
+            "count" to photos.size,
+            "photos" to photos.map { it.toToolMap() },
+        )
+    }
+
+    @Tool(
+        name = "upload_recent_photos",
+        description = "把最近 N 天加入相册的照片上传到 Cloudreve 云盘。只有用户明确要求上传照片时才调用；" +
+            "动手前先复述时间范围、张数和目标目录，用户已经说清楚就直接执行。需要相册权限，" +
+            "并先在 设置 → 连接 → Cloudreve 填好 WebDAV 地址、账号和密码。同名文件会跳过，不会删除任何文件。" +
+            "返回 truncated 为 true 时，把 next_offset 传给 offset 再调一次，直到所有照片都处理完。",
+    )
+    suspend fun uploadRecentPhotos(
+        @Param("最近 N 天，默认 3，0 表示不限") sinceDays: Int? = null,
+        @Param("可选，云盘目录，默认用设置里的 Cloudreve 目录") remoteDir: String? = null,
+        @Param("最多上传张数，默认 100，最大 200") limit: Int? = null,
+        @Param("分页偏移，默认 0；返回 truncated 为 true 时用 next_offset 继续") offset: Int? = null,
+        @Param("可选，文件名或相册名关键词，如 截图、微信") query: String? = null,
+    ): Map<String, Any?> = safely {
+        val url = settings.cloudreveUrl.trim()
+        val user = settings.cloudreveUser.trim()
+        val password = settings.cloudrevePassword
+        if (url.isBlank() || user.isBlank() || password.isBlank()) {
+            return@safely mapOf(
+                "error" to "还没有配置 Cloudreve，去 设置 → 连接 → Cloudreve 填 WebDAV 地址、账号和密码",
+            )
+        }
+        if (!hasPhotoAccess(context)) {
+            return@safely mapOf(
+                "error" to "没有相册读取权限，请到 设置 → 权限 里授权相册",
+                "need_permission" to photoPermission,
+            )
+        }
+
+        val days = (sinceDays ?: 3).coerceIn(0, 3650)
+        val max = (limit ?: 100).coerceIn(1, 200)
+        val start = (offset ?: 0).coerceAtLeast(0)
+        val dir = remoteDir?.trim()?.takeIf { it.isNotBlank() }
+            ?: settings.cloudreveDir.trim().ifBlank { "手机照片" }
+        val candidates = device.recentPhotos(query.orEmpty(), days, max + 1, start)
+        val photos = candidates.take(max)
+        val hasMore = candidates.size > max
+        if (photos.isEmpty()) {
+            return@safely mapOf(
+                "ok" to true,
+                "since_days" to days,
+                "dir" to dir,
+                "count" to 0,
+                "message" to "这个时间范围内没有找到照片",
+            )
+        }
+
+        val uploaded = mutableListOf<String>()
+        val skipped = mutableListOf<String>()
+        val failed = mutableListOf<Map<String, Any?>>()
+        photos.forEach { photo ->
+            try {
+                val bytes = device.photoBytes(photo.uri)
+                val result = cloudreve.uploadPhoto(url, user, password, dir, photo.name, photo.mime, bytes)
+                if (result.status == "uploaded") {
+                    uploaded += photo.name
+                } else {
+                    skipped += photo.name
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                failed += mapOf(
+                    "name" to photo.name,
+                    "error" to (failure.message ?: failure.javaClass.simpleName),
+                )
+            }
+        }
+        mapOf(
+            "ok" to failed.isEmpty(),
+            "since_days" to days,
+            "dir" to dir,
+            "total" to photos.size,
+            "uploaded" to uploaded.size,
+            "skipped" to skipped.size,
+            "failed" to failed.size,
+            "truncated" to hasMore,
+            "files" to uploaded.take(50),
+            "failures" to failed.take(10),
+        ).toMutableMap().apply {
+            if (hasMore) put("next_offset", start + photos.size)
+        }
+    }
+
+    private fun PhotoFile.toToolMap(): Map<String, Any?> = mapOf(
+        "uri" to uri,
+        "name" to name,
+        "album" to album,
+        "date" to photoTime.format(Instant.ofEpochMilli(addedAt)),
+        "size_mb" to (sizeBytes / 1024.0 / 1024.0 * 10).roundToInt() / 10.0,
+        "mime" to mime,
+    )
 
     @Tool(
         name = "describe_photo",

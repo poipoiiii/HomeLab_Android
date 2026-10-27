@@ -47,6 +47,18 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.put
 
+/** 相册里的一张原始照片，上传时直接读 [uri] 的字节。 */
+data class PhotoFile(
+    val uri: String,
+    val name: String,
+    val album: String,
+    val addedAt: Long,
+    val sizeBytes: Long,
+    val width: Int,
+    val height: Int,
+    val mime: String,
+)
+
 class DeviceTools(private val context: Context) {
 
     suspend fun systemResources(): JsonObject = withContext(Dispatchers.IO) {
@@ -250,83 +262,109 @@ class DeviceTools(private val context: Context) {
                     put("read_only", true)
                 }
             }
-            val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-                MediaStore.Images.Media.DATE_ADDED,
-                MediaStore.Images.Media.SIZE,
-                MediaStore.Images.Media.WIDTH,
-                MediaStore.Images.Media.HEIGHT,
-                MediaStore.Images.Media.MIME_TYPE,
-            )
             val keyword = query.trim()
-            val since = if (sinceDays > 0) {
-                System.currentTimeMillis() / 1000 - sinceDays * 86400L
-            } else {
-                0L
-            }
-            val clauses = mutableListOf<String>()
-            val args = mutableListOf<String>()
-            if (since > 0) {
-                clauses += "${MediaStore.Images.Media.DATE_ADDED} >= ?"
-                args += since.toString()
-            }
-            if (keyword.isNotEmpty()) {
-                clauses += "(${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? OR " +
-                    "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} LIKE ?)"
-                args += "%$keyword%"
-                args += "%$keyword%"
-            }
-            val selection = clauses.joinToString(" AND ").ifBlank { null }
-            val sort = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-            val rows = mutableListOf<JsonObject>()
-
-            runCatching {
-                context.contentResolver
-                    .query(collection, projection, selection, args.toTypedArray(), sort)
-                    ?.use { cursor ->
-                        val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                        val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                        val albumIndex =
-                            cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-                        val dateIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-                        val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-                        val widthIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
-                        val heightIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
-                        val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
-                        while (cursor.moveToNext() && rows.size < limit) {
-                            rows += buildJsonObject {
-                                put(
-                                    "uri",
-                                    ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
-                                        .toString(),
-                                )
-                                put("name", cursor.getString(nameIndex).orEmpty())
-                                put("album", cursor.getString(albumIndex).orEmpty())
-                                put("date", formatTime(cursor.getLong(dateIndex) * 1000))
-                                put("size_mb", mb(cursor.getLong(sizeIndex)))
-                                put("width", cursor.getInt(widthIndex))
-                                put("height", cursor.getInt(heightIndex))
-                                put("mime", cursor.getString(mimeIndex).orEmpty())
-                            }
-                        }
+            val photos = runCatching { queryPhotos(keyword, sinceDays, limit) }
+                .getOrElse { failure ->
+                    return@withContext buildJsonObject {
+                        put("error", "读取相册失败：${failure.message ?: failure.javaClass.simpleName}")
                     }
-            }.onFailure { failure ->
-                return@withContext buildJsonObject {
-                    put("error", "读取相册失败：${failure.message ?: failure.javaClass.simpleName}")
                 }
-            }
 
             buildJsonObject {
                 put("query", keyword)
                 put("since_days", sinceDays)
-                put("count", rows.size)
-                put("photos", JsonArray(rows))
+                put("count", photos.size)
+                put("photos", JsonArray(photos.map { it.toPhotoJson() }))
                 put("read_only", true)
             }
         }
+
+    /** 上传工具使用的原始照片列表，按加入相册时间倒序；offset 用于分批上传。 */
+    suspend fun recentPhotos(
+        query: String,
+        sinceDays: Int,
+        limit: Int,
+        offset: Int = 0,
+    ): List<PhotoFile> = withContext(Dispatchers.IO) {
+        queryPhotos(query.trim(), sinceDays, limit + offset).drop(offset)
+    }
+
+    /** 读取原始照片字节，用于上传到云盘。 */
+    suspend fun photoBytes(uriString: String): ByteArray = withContext(Dispatchers.IO) {
+        context.contentResolver.openInputStream(Uri.parse(uriString))?.use { it.readBytes() }
+            ?: throw IllegalStateException("打不开这张照片：$uriString")
+    }
+
+    private fun queryPhotos(keyword: String, sinceDays: Int, limit: Int): List<PhotoFile> {
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.MIME_TYPE,
+        )
+        val since = if (sinceDays > 0) {
+            System.currentTimeMillis() / 1000 - sinceDays * 86400L
+        } else {
+            0L
+        }
+        val clauses = mutableListOf<String>()
+        val args = mutableListOf<String>()
+        if (since > 0) {
+            clauses += "${MediaStore.Images.Media.DATE_ADDED} >= ?"
+            args += since.toString()
+        }
+        if (keyword.isNotEmpty()) {
+            clauses += "(${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? OR " +
+                "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} LIKE ?)"
+            args += "%$keyword%"
+            args += "%$keyword%"
+        }
+        val selection = clauses.joinToString(" AND ").ifBlank { null }
+        val sort = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+        val photos = mutableListOf<PhotoFile>()
+
+        context.contentResolver
+            .query(collection, projection, selection, args.toTypedArray(), sort)
+            ?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val albumIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                val dateIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+                val widthIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+                val heightIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+                val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+                while (cursor.moveToNext() && photos.size < limit) {
+                    photos += PhotoFile(
+                        uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex)).toString(),
+                        name = cursor.getString(nameIndex).orEmpty(),
+                        album = cursor.getString(albumIndex).orEmpty(),
+                        addedAt = cursor.getLong(dateIndex) * 1000,
+                        sizeBytes = cursor.getLong(sizeIndex),
+                        width = cursor.getInt(widthIndex),
+                        height = cursor.getInt(heightIndex),
+                        mime = cursor.getString(mimeIndex).orEmpty(),
+                    )
+                }
+            }
+        return photos
+    }
+
+    private fun PhotoFile.toPhotoJson(): JsonObject = buildJsonObject {
+        put("uri", uri)
+        put("name", name)
+        put("album", album)
+        put("date", formatTime(addedAt))
+        put("size_mb", mb(sizeBytes))
+        put("width", width)
+        put("height", height)
+        put("mime", mime)
+    }
 
     /** 读取图片并压到 [maxSide] 以内，返回 JPEG 的 base64，用于多模态识图。 */
     suspend fun imageBase64(uriString: String, maxSide: Int = 1024): String =

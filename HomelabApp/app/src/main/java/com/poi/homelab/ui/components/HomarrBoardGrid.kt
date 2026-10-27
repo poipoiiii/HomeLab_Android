@@ -1,22 +1,31 @@
 package com.poi.homelab.ui.components
 
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,9 +33,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.SubcomposeAsyncImage
 import com.poi.homelab.data.HomarrApp
 import com.poi.homelab.data.HomarrBoard
@@ -35,6 +50,7 @@ import com.poi.homelab.data.booleanValue
 import com.poi.homelab.data.resolveHomarrUrl
 import com.poi.homelab.data.stringValue
 import com.poi.homelab.ui.theme.CardSurfaceAlpha
+import com.poi.homelab.ui.theme.Success
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
@@ -55,6 +71,7 @@ fun HomarrBoardGrid(
     board: HomarrBoard,
     apps: List<HomarrApp>,
     baseUrl: String,
+    status: Map<String, Boolean> = emptyMap(),
     onOpen: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -103,6 +120,7 @@ fun HomarrBoardGrid(
                         item = cellItem.item,
                         apps = apps,
                         baseUrl = baseUrl,
+                        status = status,
                         onOpen = onOpen,
                     )
                 }
@@ -124,6 +142,7 @@ private fun BoardItem(
     item: HomarrItem,
     apps: List<HomarrApp>,
     baseUrl: String,
+    status: Map<String, Boolean>,
     onOpen: (String) -> Unit,
 ) {
     val title = item.advancedOptions?.stringValue("title")
@@ -136,6 +155,8 @@ private fun BoardItem(
                 onClick = { href?.let(onOpen) },
             ) {
                 val showTitle = item.options.booleanValue("showTitle") == true
+                val up = app?.let { status[it.id] }
+                val showDot = up != null && item.options.booleanValue("pingEnabled") != false
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -146,6 +167,19 @@ private fun BoardItem(
                         name = app?.name ?: title ?: "应用",
                         iconUrl = app?.let { resolveHomarrUrl(baseUrl, it.iconUrl) },
                     )
+                    if (showDot) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(2.dp)
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (up == true) Success else MaterialTheme.colorScheme.error,
+                                )
+                                .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                        )
+                    }
                 }
                 if (showTitle) {
                     Text(
@@ -160,12 +194,23 @@ private fun BoardItem(
             }
         }
 
-        "clock" -> ClockTile(item = item, title = title)
+        "clock" -> ClockTile(
+            item = item,
+            title = title ?: item.options.stringValue("customTitle"),
+        )
 
         "iframe" -> {
             val embedUrl = resolveHomarrUrl(baseUrl, item.options.stringValue("embedUrl"))
-            Tile(enabled = embedUrl != null, onClick = { embedUrl?.let(onOpen) }) {
-                TileCaption(title = title ?: "嵌入页面", subtitle = embedUrl?.hostLabel() ?: "—")
+            if (embedUrl != null) {
+                IframeTile(
+                    url = embedUrl,
+                    title = title ?: "嵌入页面",
+                    onOpen = { onOpen(embedUrl) },
+                )
+            } else {
+                Tile(enabled = false, onClick = null) {
+                    TileCaption(title = title ?: "嵌入页面", subtitle = "—")
+                }
             }
         }
 
@@ -245,7 +290,7 @@ private fun AppIcon(name: String, iconUrl: String?) {
         contentDescription = name,
         contentScale = ContentScale.Fit,
         modifier = Modifier.fillMaxSize().padding(2.dp),
-        loading = {},
+        loading = { Monogram(name) },
         error = { Monogram(name) },
     )
 }
@@ -314,6 +359,108 @@ private fun Tile(
         ) {
             Column(Modifier.fillMaxSize().padding(6.dp), content = content)
         }
+    }
+}
+
+/**
+ * iframe 组件直接渲染页面本身，而不是只给一个「在 Homarr 中查看」的占位。
+ *
+ * 页面可滚动、可点按；底栏「打开」进全屏应用内浏览器。
+ */
+@Composable
+private fun IframeTile(url: String, title: String, onOpen: () -> Unit) {
+    val inPreview = LocalInspectionMode.current
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(TileShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, TileShape),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (!inPreview) {
+                    InlinePage(url = url, modifier = Modifier.fillMaxSize())
+                }
+            }
+            // 底栏放在 WebView 外面：页面里的点击不会落到这里，按钮才真的可点
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f))
+                    .clickable(onClick = onOpen)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = url.hostLabel(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = "打开",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlinePage(url: String, modifier: Modifier = Modifier) {
+    val lifecycle = LocalLifecycleOwner.current
+    var webView by remember { mutableStateOf<WebView?>(null) }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            WebView(context).apply {
+                // 允许页面内滚动与点击；看板本身用磁贴外的区域拖动
+                isFocusable = false
+                isFocusableInTouchMode = false
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                settings.builtInZoomControls = false
+                settings.displayZoomControls = false
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                webViewClient = WebViewClient()
+                loadUrl(url)
+                webView = this
+            }
+        },
+        onRelease = { view ->
+            view.stopLoading()
+            view.loadUrl("about:blank")
+            view.destroy()
+            if (webView === view) webView = null
+        },
+    )
+
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> webView?.onResume()
+                Lifecycle.Event.ON_PAUSE -> webView?.onPause()
+                else -> Unit
+            }
+        }
+        lifecycle.lifecycle.addObserver(observer)
+        onDispose { lifecycle.lifecycle.removeObserver(observer) }
     }
 }
 

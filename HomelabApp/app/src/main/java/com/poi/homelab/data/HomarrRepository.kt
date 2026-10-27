@@ -1,7 +1,11 @@
 package com.poi.homelab.data
 
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -37,6 +41,38 @@ class HomarrRepository(
             val body = get(baseUrl, apiKey, "/api/apps", emptyList())
             json.decodeFromString(body)
         }
+
+    /**
+     * 逐个探测 app 的 href，给磁贴右下角的状态点用。
+     *
+     * Homarr 自带的 pingUrl 指向容器内网名（cloudreve:5212 之类），手机访问不到，
+     * 所以改探 tailnet 上的 href：任何小于 500 的响应都算在线（401/403 也说明服务活着）。
+     */
+    suspend fun statuses(baseUrl: String, apps: List<HomarrApp>): Map<String, Boolean> =
+        coroutineScope {
+            apps.filter { !it.href.isNullOrBlank() }
+                .map { app ->
+                    async {
+                        val url = resolveHomarrUrl(baseUrl, app.href)
+                        app.id to (url != null && reachable(url))
+                    }
+                }
+                .awaitAll()
+                .toMap()
+        }
+
+    private suspend fun reachable(url: String): Boolean = withContext(Dispatchers.IO) {
+        val target = url.toHttpUrlOrNull() ?: return@withContext false
+        runCatching {
+            val request = Request.Builder().url(target).head().build()
+            probe.newCall(request).execute().use { it.code < 500 }
+        }.getOrDefault(false)
+    }
+
+    private val probe: OkHttpClient = http.newBuilder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .build()
 
     suspend fun board(baseUrl: String, apiKey: String, name: String): HomarrBoard =
         withContext(Dispatchers.IO) {

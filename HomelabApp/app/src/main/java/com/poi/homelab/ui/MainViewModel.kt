@@ -48,6 +48,7 @@ data class PendingAction(
 data class UiState(
     val settings: AppSettings = AppSettings(),
     val health: HealthSnapshot? = null,
+    val healthError: String? = null,
     val overview: BillOverview? = null,
     val transactions: List<BillTransaction> = emptyList(),
     val billMonth: String = YearMonth.now().toString(),
@@ -79,6 +80,7 @@ data class UiState(
     val calendarEntries: List<CalendarEntry> = emptyList(),
     val board: HomarrBoard? = null,
     val boardApps: List<HomarrApp> = emptyList(),
+    val appStatus: Map<String, Boolean> = emptyMap(),
     val loadingBoard: Boolean = false,
     val boardError: String? = null,
 )
@@ -146,6 +148,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 it.copy(
                     board = null,
                     boardApps = emptyList(),
+                    appStatus = emptyMap(),
                     loadingBoard = false,
                     boardError = null,
                 )
@@ -168,6 +171,11 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 _state.update {
                     it.copy(board = board, boardApps = apps, loadingBoard = false, boardError = null)
                 }
+                // 磁贴状态点单独补一轮，别拖慢看板本身出现
+                val statuses = runCatching {
+                    app.homarr.statuses(settings.homarrUrl, apps)
+                }.getOrDefault(emptyMap())
+                _state.update { it.copy(appStatus = statuses) }
             }.onFailure { error ->
                 _state.update {
                     it.copy(loadingBoard = false, boardError = readable(error))
@@ -189,17 +197,23 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
     fun refreshHealth() {
         val settings = _state.value.settings
         if (settings.labUrl.isBlank()) {
-            _state.update { it.copy(health = null, message = "还没配置 Lab Tools 地址") }
+            _state.update {
+                it.copy(health = null, healthError = null, message = "还没配置 Lab Tools 地址")
+            }
             return
         }
         viewModelScope.launch {
-            _state.update { it.copy(loadingHealth = true) }
+            _state.update { it.copy(loadingHealth = true, healthError = null) }
             runCatching { app.lab.health(settings.labUrl) }
                 .onSuccess { health ->
-                    _state.update { it.copy(health = health, loadingHealth = false) }
+                    _state.update {
+                        it.copy(health = health, loadingHealth = false, healthError = null)
+                    }
                 }
                 .onFailure { error ->
-                    _state.update { it.copy(loadingHealth = false, message = readable(error)) }
+                    _state.update {
+                        it.copy(loadingHealth = false, healthError = readable(error), message = readable(error))
+                    }
                 }
         }
     }
@@ -451,6 +465,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                     lab = app.lab,
                     bill = app.bill,
                     calendar = app.calendar,
+                    cloudreve = app.cloudreve,
                     settings = settings,
                     provider = provider,
                     ai = app.aiClient,
@@ -673,8 +688,11 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             - 闲聊、寒暄、常识问答、写作、翻译、情绪陪伴：直接回答，不要调用任何工具。
             - 只有确实需要手机、相册、Homelab 或账本数据时才调用工具；能从上下文推断的就不要调用。
             - 不要为了确认环境或展示能力而调用工具，也不要把一次简单提问拆成多次工具调用。
-            相册相关任务按 find_photos → describe_photo → generate_image 的顺序推进；只有用户明确要求出图才调用 generate_image，只想要提示词时停在提示词。
-            你的查询默认只读；可以写数据的例外只有三个：把生成的图片保存到相册、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）。不能修改或删除已有文件，不能启停容器，不能修改设置。
+            相册相关任务：
+            - 查找和识别：按 find_photos → describe_photo → generate_image 的顺序推进；只有用户明确要求出图才调用 generate_image，只想要提示词时停在提示词。
+            - 上传到 Cloudreve：用户说“把最近 N 天的照片传到云盘/Cloudreve”时，先用 list_recent_photos 确认张数和时间范围，再调用 upload_recent_photos 执行，并在回答里复述上传数量、跳过的同名文件和目标目录。用户已经说清范围就直接执行，不要反复追问；结果里 truncated 为 true 时，用 next_offset 作为 offset 继续上传，直到传完。
+            - 没有相册权限时引导去 设置 → 权限 授权相册；没配 Cloudreve 时引导去 设置 → 连接 填 WebDAV 地址、账号和密码。
+            你的查询默认只读；可以写数据的例外只有四个：把生成的图片保存到相册、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）、把用户明确指定的照片上传到 Cloudreve。不能修改或删除已有文件，不能启停容器，不能修改设置。
             界面自动化（微信等第三方 App）：
             - 动手前先调用 automation_status；无障碍没开就告诉用户去 设置 → 无障碍 → 已下载的应用 打开「poi's home」，不要假装已经操作。
             - 固定顺序：automation_status → open_app → wait_for_ui 或 list_screen → click_ui / input_text → list_screen 复核 → press_key。
@@ -730,7 +748,9 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
 
     fun testConnections() {
         val settings = _state.value.settings
-        if (settings.labUrl.isBlank() && settings.billUrl.isBlank() && settings.homarrUrl.isBlank()) {
+        if (settings.labUrl.isBlank() && settings.billUrl.isBlank() &&
+            settings.homarrUrl.isBlank() && settings.cloudreveUrl.isBlank()
+        ) {
             _state.update { it.copy(message = "先把地址填上再测试") }
             return
         }
@@ -751,6 +771,17 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 runCatching { app.homarr.boards(settings.homarrUrl, settings.homarrApiKey) }
                     .onSuccess { lines += "Homarr：正常，${it.size} 个看板" }
                     .onFailure { lines += "Homarr：${readable(it)}" }
+            }
+            if (settings.cloudreveUrl.isNotBlank()) {
+                runCatching {
+                    app.cloudreve.ping(
+                        settings.cloudreveUrl,
+                        settings.cloudreveUser,
+                        settings.cloudrevePassword,
+                    )
+                }
+                    .onSuccess { lines += "Cloudreve：WebDAV 连接正常" }
+                    .onFailure { lines += "Cloudreve：${readable(it)}" }
             }
             _state.update { it.copy(connectionTest = lines.joinToString("\n")) }
         }

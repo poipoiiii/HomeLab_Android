@@ -230,7 +230,7 @@ private val previewEmptyState = UiState(settings = previewSettings)
 @Composable
 private fun HomePreview() {
     HomelabTheme("light") {
-        HomeScreen(previewState, {}, {}, {}, {}, {}, {}, {})
+        HomeScreen(previewState, {}, {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -244,7 +244,7 @@ private fun HomePreview() {
 @Composable
 private fun HomeDarkPreview() {
     HomelabTheme("dark") {
-        HomeScreen(previewState, {}, {}, {}, {}, {}, {}, {})
+        HomeScreen(previewState, {}, {}, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -323,6 +323,7 @@ private fun HomeEmptyPreview() {
             onOpenBills = {},
             onOpenServices = {},
             onOpenDownloads = {},
+            onOpenLink = {},
             onToggleChecklist = {},
             onSaveTodos = {},
         )

@@ -100,6 +100,7 @@ import com.poi.homelab.ui.screens.BillsScreen
 import com.poi.homelab.ui.screens.CalendarScreen
 import com.poi.homelab.ui.screens.DownloadsScreen
 import com.poi.homelab.ui.screens.HomeScreen
+import com.poi.homelab.ui.screens.InAppBrowserScreen
 import com.poi.homelab.ui.screens.ServicesScreen
 import com.poi.homelab.ui.screens.SettingsScreen
 import com.poi.homelab.ui.theme.CardSurfaceAlpha
@@ -137,6 +138,7 @@ fun HomelabApp(viewModel: MainViewModel) {
     var navStage by remember { mutableStateOf(NavStage.Full) }
     var barPulse by remember { mutableIntStateOf(0) }
     var aiConfigOpen by rememberSaveable { mutableStateOf(false) }
+    var browserUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var exitArmed by rememberSaveable { mutableStateOf(false) }
     val tabCenters = remember { mutableStateMapOf<Tab, Offset>() }
     var contentBounds by remember { mutableStateOf(Rect.Zero) }
@@ -199,7 +201,9 @@ fun HomelabApp(viewModel: MainViewModel) {
         }
     }
 
+    val openUrl = browserUrl
     WallpaperBackdrop(state.settings) {
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbar) },
@@ -267,6 +271,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onOpenBills = { openTab(Tab.Bills) },
                     onOpenServices = { openTab(Tab.Services) },
                     onOpenDownloads = { openTab(Tab.Downloads) },
+                    onOpenLink = { browserUrl = it },
                     onToggleChecklist = viewModel::toggleChecklist,
                     onSaveTodos = viewModel::saveTodos,
                 )
@@ -315,6 +320,10 @@ fun HomelabApp(viewModel: MainViewModel) {
             }
             }
         }
+    }
+    openUrl?.let { url ->
+        InAppBrowserScreen(url = url, onClose = { browserUrl = null })
+    }
     }
     }
 

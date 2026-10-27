@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
@@ -86,6 +87,12 @@ fun SettingsScreen(
     var homarrUrl by rememberSaveable(settings.homarrUrl) { mutableStateOf(settings.homarrUrl) }
     var homarrApiKey by rememberSaveable(settings.homarrApiKey) { mutableStateOf(settings.homarrApiKey) }
     var homarrBoard by rememberSaveable(settings.homarrBoard) { mutableStateOf(settings.homarrBoard) }
+    var cloudreveUrl by rememberSaveable(settings.cloudreveUrl) { mutableStateOf(settings.cloudreveUrl) }
+    var cloudreveUser by rememberSaveable(settings.cloudreveUser) { mutableStateOf(settings.cloudreveUser) }
+    var cloudrevePassword by rememberSaveable(settings.cloudrevePassword) {
+        mutableStateOf(settings.cloudrevePassword)
+    }
+    var cloudreveDir by rememberSaveable(settings.cloudreveDir) { mutableStateOf(settings.cloudreveDir) }
     var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
     var deviceName by rememberSaveable(settings.deviceName) { mutableStateOf(settings.deviceName) }
     var wallpaperOpacity by remember(settings.wallpaperOpacity) {
@@ -370,6 +377,53 @@ fun SettingsScreen(
                 )
 
                 Text(
+                    "Cloudreve（WebDAV）",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 18.dp),
+                )
+                SettingHint(
+                    "填站点根地址即可，会自动拼 /dav/（站点需开启 WebDAV）。账号密码用 Cloudreve 登录账号；照片上传工具会用到。",
+                    detailed,
+                    Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                OutlinedTextField(
+                    value = cloudreveUrl,
+                    onValueChange = { cloudreveUrl = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("https://xxx.ts.net:5212") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = cloudreveUser,
+                    onValueChange = { cloudreveUser = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    placeholder = { Text("Cloudreve 账号（邮箱）") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = cloudrevePassword,
+                    onValueChange = { cloudrevePassword = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    placeholder = { Text("Cloudreve 密码") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = cloudreveDir,
+                    onValueChange = { cloudreveDir = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    placeholder = { Text("上传目录，默认 手机照片") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+
+                Text(
                     "Bearer Token（可选）",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 18.dp),
@@ -421,6 +475,10 @@ fun SettingsScreen(
                                 homarrUrl = homarrUrl.trim(),
                                 homarrApiKey = homarrApiKey.trim(),
                                 homarrBoard = homarrBoard.trim(),
+                                cloudreveUrl = cloudreveUrl.trim(),
+                                cloudreveUser = cloudreveUser.trim(),
+                                cloudrevePassword = cloudrevePassword,
+                                cloudreveDir = cloudreveDir.trim(),
                                 token = token.trim(),
                                 deviceName = deviceName.trim(),
                             ),

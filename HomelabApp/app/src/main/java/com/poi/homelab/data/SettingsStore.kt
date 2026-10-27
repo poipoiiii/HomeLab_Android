@@ -35,6 +35,10 @@ data class AppSettings(
     val homarrUrl: String = "",
     val homarrApiKey: String = "",
     val homarrBoard: String = "",
+    val cloudreveUrl: String = "",
+    val cloudreveUser: String = "",
+    val cloudrevePassword: String = "",
+    val cloudreveDir: String = "手机照片",
     val token: String = "",
     val deviceName: String = Build.MODEL.orEmpty(),
     val themeMode: String = "system",
@@ -58,6 +62,10 @@ class SettingsStore(private val context: Context) {
         val HOMARR_BOARD = stringPreferencesKey("homarr_board")
         // 区分「从没配过」和「用户主动清空」：前者用 local.properties 注入的默认值，后者尊重空值
         val HOMARR_URL_TOUCHED = booleanPreferencesKey("homarr_url_touched")
+        val CLOUDREVE_URL = stringPreferencesKey("cloudreve_url")
+        val CLOUDREVE_USER = stringPreferencesKey("cloudreve_user")
+        val CLOUDREVE_PASSWORD = stringPreferencesKey("cloudreve_password")
+        val CLOUDREVE_DIR = stringPreferencesKey("cloudreve_dir")
         val TOKEN = stringPreferencesKey("api_token")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -90,6 +98,10 @@ class SettingsStore(private val context: Context) {
                 },
                 homarrApiKey = prefs[Keys.HOMARR_API_KEY].orEmpty(),
                 homarrBoard = prefs[Keys.HOMARR_BOARD].orEmpty(),
+                cloudreveUrl = prefs[Keys.CLOUDREVE_URL].orEmpty(),
+                cloudreveUser = prefs[Keys.CLOUDREVE_USER].orEmpty(),
+                cloudrevePassword = prefs[Keys.CLOUDREVE_PASSWORD].orEmpty(),
+                cloudreveDir = prefs[Keys.CLOUDREVE_DIR]?.takeIf { it.isNotBlank() } ?: "手机照片",
                 token = prefs[Keys.TOKEN].orEmpty(),
                 deviceName = prefs[Keys.DEVICE_NAME] ?: Build.MODEL.orEmpty(),
                 themeMode = prefs[Keys.THEME_MODE] ?: "system",
@@ -114,6 +126,10 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.HOMARR_URL_TOUCHED] = true
             prefs[Keys.HOMARR_API_KEY] = value.homarrApiKey.trim()
             prefs[Keys.HOMARR_BOARD] = value.homarrBoard.trim()
+            prefs[Keys.CLOUDREVE_URL] = value.cloudreveUrl.trim()
+            prefs[Keys.CLOUDREVE_USER] = value.cloudreveUser.trim()
+            prefs[Keys.CLOUDREVE_PASSWORD] = value.cloudrevePassword
+            prefs[Keys.CLOUDREVE_DIR] = value.cloudreveDir.trim()
             prefs[Keys.TOKEN] = value.token.trim()
             prefs[Keys.DEVICE_NAME] = value.deviceName.trim()
             prefs[Keys.THEME_MODE] = value.themeMode
