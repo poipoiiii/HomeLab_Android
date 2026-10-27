@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.decode.SvgDecoder
 import coil.Coil
 import com.poi.homelab.data.AppContainer
+import com.poi.homelab.notify.CaptureFlushReceiver
 
 class HomelabApplication : Application() {
 
@@ -19,5 +20,7 @@ class HomelabApplication : Application() {
                 .crossfade(true)
                 .build(),
         )
+        // 采集队列每 30 分钟补发一次；重复调用只会刷新同一条 alarm
+        CaptureFlushReceiver.schedule(this)
     }
 }

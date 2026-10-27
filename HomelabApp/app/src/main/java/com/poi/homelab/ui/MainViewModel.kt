@@ -19,6 +19,7 @@ import com.poi.homelab.data.HomarrBoard
 import com.poi.homelab.data.TodoItem
 import com.poi.homelab.data.defaultTodoItems
 import com.poi.homelab.data.requiresKey
+import com.poi.homelab.notify.NotifyPrefs
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.time.YearMonth
@@ -122,6 +123,8 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         viewModelScope.launch {
             app.settings.settings.collect { value ->
                 _state.update { it.copy(settings = value) }
+                // 采集服务读不了 DataStore，这里把账本地址与凭证镜像给 SharedPreferences
+                NotifyPrefs.sync(app.appContext, value.billUrl, value.token)
                 if (!bootstrapped &&
                     (value.billUrl.isNotBlank() ||
                         value.homarrUrl.isNotBlank() ||

@@ -45,6 +45,7 @@ import com.poi.homelab.automation.AutomationRestore
 import com.poi.homelab.automation.UiAutomation
 import com.poi.homelab.data.AppSettings
 import com.poi.homelab.ui.UiState
+import com.poi.homelab.ui.components.CaptureSettingsCard
 import com.poi.homelab.ui.components.CreamCard
 import com.poi.homelab.ui.components.Pill
 import com.poi.homelab.ui.components.SecondaryButton
@@ -684,6 +685,10 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        item {
+            CaptureSettingsCard(detailed = detailed, isPreview = isPreview)
         }
 
         item {
