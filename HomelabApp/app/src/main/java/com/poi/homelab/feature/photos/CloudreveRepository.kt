@@ -27,7 +27,8 @@ private val collectionTag = Regex("<[^>]*:?collection\\b", RegexOption.IGNORE_CA
  * Cloudreve WebDAV 客户端，只覆盖照片上传需要的最小动作：
  * PROPFIND 测连接/列目录、MKCOL 建目录、HEAD 查重、PUT 上传。
  *
- * WebDAV 入口固定是站点根下的 `/dav/`，用户名和密码就是 Cloudreve 登录账号。
+ * WebDAV 入口固定是站点根下的 `/dav/`。Basic Auth 的账号是 Cloudreve 注册邮箱，
+ * 密码是在 Cloudreve「WebDAV」页面创建 WebDAV 账户时生成的密码，不是登录密码。
  */
 class CloudreveRepository(http: OkHttpClient) {
 
@@ -154,7 +155,7 @@ class CloudreveRepository(http: OkHttpClient) {
             .header("Authorization", auth)
             .build()
         client.newCall(put).execute().use { response ->
-            ensureAuthorized(response.code)
+            ensureAuthorized(response)
             if (!response.isSuccessful) {
                 throw IOException("上传失败：HTTP ${response.code}")
             }
@@ -176,7 +177,7 @@ class CloudreveRepository(http: OkHttpClient) {
                     .header("Authorization", auth)
                     .build()
                 client.newCall(mkcol).execute().use { response ->
-                    ensureAuthorized(response.code)
+                    ensureAuthorized(response)
                     // 405 表示目录已存在，是正常情况。
                     if (!response.isSuccessful && response.code != 405) {
                         throw IOException("创建目录「$segment」失败：HTTP ${response.code}")

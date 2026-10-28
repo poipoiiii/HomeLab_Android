@@ -393,7 +393,8 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 18.dp),
                 )
                 SettingHint(
-                    "填站点根地址即可，会自动拼 /dav/（站点需开启 WebDAV）。账号密码用 Cloudreve 登录账号；照片上传工具会用到。",
+                    "填站点根地址即可，会自动拼 /dav/。先在 Cloudreve 的 WebDAV 页面创建 WebDAV 账户" +
+                        "（用户组要允许 WebDAV）：账号填注册邮箱，密码用该账户生成/显示的密码，不是登录密码。",
                     detailed,
                     Modifier.padding(top = 4.dp, bottom = 8.dp),
                 )
@@ -417,7 +418,7 @@ fun SettingsScreen(
                     value = cloudrevePassword,
                     onValueChange = { cloudrevePassword = it },
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    placeholder = { Text("Cloudreve 密码") },
+                    placeholder = { Text("Cloudreve WebDAV 密码（不是登录密码）") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(

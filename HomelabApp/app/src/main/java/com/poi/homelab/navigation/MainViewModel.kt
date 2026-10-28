@@ -1345,7 +1345,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             - 查找和识别：find_photos 返回后，应用会把照片缩略图显示在对话里；调用 describe_photo 时把 uri 原样传过去。如果 describe_photo 返回 error（打不开图片），重新 find_photos 拿新 uri，或把照片文件名传给 name 再试一次，不要用同一个失效 uri 连续重试。
             - 只想要提示词就停在 describe_photo；只有用户明确要求出图才调用 generate_image。
             - 上传到 Cloudreve：用户说“把最近 N 天的照片传到云盘/Cloudreve”时，直接调用 upload_recent_photos。调用后应用会弹出文件夹选择，用户选定目录后才真正上传；回答里只说明找到多少张、请用户在弹出的窗口里选目录，不要说“已上传完成”。用户取消弹窗时不要自动重试上传。
-            - 没有相册权限时引导去 设置 → 权限 授权相册；没配 Cloudreve 时引导去 设置 → 连接 填 WebDAV 地址、账号和密码。
+            - 没有相册权限时引导去 设置 → 权限 授权相册；没配 Cloudreve 时引导去 设置 → 连接 填 WebDAV 地址、注册邮箱和 Cloudreve WebDAV 账户生成的密码（不是登录密码）。
             你的查询默认只读；可以写数据的例外只有四个：把生成的图片保存到相册、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）、把用户明确指定的照片上传到 Cloudreve。不能修改或删除已有文件，不能启停容器，不能修改设置。
             账本问题：
             - 用户问某个月/最近一个月的大额消费、支出排行、某笔之外还有什么时，调用 get_recent_expenses；不要把默认返回条数当成全部流水。
