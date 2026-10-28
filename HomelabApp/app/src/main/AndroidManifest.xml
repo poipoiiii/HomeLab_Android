@@ -31,7 +31,7 @@
         android:usesCleartextTraffic="true">
 
         <service
-            android:name=".automation.UiAutomationService"
+            android:name=".feature.automation.UiAutomationService"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -44,7 +44,7 @@
         </service>
 
         <receiver
-            android:name=".automation.AutomationRestoreReceiver"
+            android:name=".feature.automation.AutomationRestoreReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -54,7 +54,7 @@
 
         <!-- 记账采集：通知监听 + 银行短信上报到账本 -->
         <service
-            android:name=".notify.NotificationCaptureService"
+            android:name=".feature.notify.NotificationCaptureService"
             android:exported="true"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
@@ -64,7 +64,7 @@
         </service>
 
         <receiver
-            android:name=".notify.SmsReceiver"
+            android:name=".feature.notify.SmsReceiver"
             android:exported="true"
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="999">
@@ -73,17 +73,23 @@
         </receiver>
 
         <receiver
-            android:name=".notify.CaptureFlushReceiver"
+            android:name=".feature.notify.CaptureFlushReceiver"
             android:exported="false" />
 
         <receiver
-            android:name=".notify.CaptureBootReceiver"
+            android:name=".feature.notify.CaptureBootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- 照片自动同步：JobScheduler 周期任务，上传可能超过广播接收器时限 -->
+        <service
+            android:name=".feature.photos.PhotoSyncJobService"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <activity
             android:name=".MainActivity"

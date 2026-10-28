@@ -7,10 +7,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.poi.homelab.ui.HomelabApp
-import com.poi.homelab.ui.MainViewModel
-import com.poi.homelab.ui.components.LaunchSplashHost
-import com.poi.homelab.ui.theme.HomelabTheme
+import com.poi.homelab.core.ui.components.LaunchSplashHost
+import com.poi.homelab.core.ui.theme.HomelabTheme
+import com.poi.homelab.navigation.HomelabApp
+import com.poi.homelab.navigation.MainViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

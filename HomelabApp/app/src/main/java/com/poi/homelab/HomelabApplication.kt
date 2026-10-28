@@ -1,11 +1,11 @@
 package com.poi.homelab
 
 import android.app.Application
-import coil.ImageLoader
-import coil.decode.SvgDecoder
 import coil.Coil
-import com.poi.homelab.data.AppContainer
-import com.poi.homelab.notify.CaptureFlushReceiver
+import coil.decode.SvgDecoder
+import coil.ImageLoader
+import com.poi.homelab.core.AppContainer
+import com.poi.homelab.feature.notify.CaptureFlushReceiver
 
 class HomelabApplication : Application() {
 
