@@ -64,6 +64,7 @@ import com.poi.homelab.core.util.hasPhotoAccess
 import com.poi.homelab.core.util.hasUsageAccess
 import com.poi.homelab.core.util.photoPermission
 import com.poi.homelab.feature.automation.AutomationRestore
+import com.poi.homelab.feature.automation.JumpGuard
 import com.poi.homelab.feature.automation.SplashSkip
 import com.poi.homelab.feature.automation.UiAutomation
 import com.poi.homelab.feature.homarr.HomarrBoard
@@ -118,6 +119,7 @@ fun SettingsScreen(
     var syncDialogOpen by rememberSaveable { mutableStateOf(false) }
     var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
     var deviceName by rememberSaveable(settings.deviceName) { mutableStateOf(settings.deviceName) }
+    var weatherCity by rememberSaveable(settings.weatherCity) { mutableStateOf(settings.weatherCity) }
     var wallpaperOpacity by remember(settings.wallpaperOpacity) {
         mutableFloatStateOf(settings.wallpaperOpacity)
     }
@@ -147,6 +149,12 @@ fun SettingsScreen(
         mutableStateOf(if (isPreview) emptySet<String>() else SplashSkip.extraPackages(context))
     }
     var splashAppsOpen by rememberSaveable { mutableStateOf(false) }
+    var jumpGuard by remember {
+        mutableStateOf(if (isPreview) false else JumpGuard.isEnabled(context))
+    }
+    var jumpBlocked by remember {
+        mutableStateOf(if (isPreview) 0 else JumpGuard.blockedCount(context))
+    }
     if (!isPreview) {
         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
             usageGranted = hasUsageAccess(context)
@@ -154,6 +162,8 @@ fun SettingsScreen(
             automationGranted = UiAutomation.isEnabled(context)
             autoRestoreReady = AutomationRestore.canAutoRestore(context)
             splashExtra = SplashSkip.extraPackages(context)
+            jumpGuard = JumpGuard.isEnabled(context)
+            jumpBlocked = JumpGuard.blockedCount(context)
             photoSyncStatus = PhotoSyncStatus.describe(context)
             // 用户可能刚在系统里开了精确闹钟，回到前台时重排一次，让下一次走精确时间
             PhotoAutoSync.apply(context, settings.photoAutoSync, settings.photoSyncHour)
@@ -337,6 +347,25 @@ fun SettingsScreen(
                         onCheckedChange = onShowLedger,
                     )
                 }
+            }
+        }
+
+        item {
+            CreamCard {
+                Text("首页天气", style = MaterialTheme.typography.titleMedium)
+                SettingHint(
+                    "填城市名后，首页「更多」里会出现天气卡。数据直接来自 Open-Meteo，不经过 Homarr；留空则不显示。",
+                    detailed,
+                    Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                OutlinedTextField(
+                    value = weatherCity,
+                    onValueChange = { weatherCity = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("城市名，例如 杭州") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
             }
         }
 
@@ -550,6 +579,7 @@ fun SettingsScreen(
                                 photoAutoSync = photoAutoSync,
                                 token = token.trim(),
                                 deviceName = deviceName.trim(),
+                                weatherCity = weatherCity.trim(),
                             ),
                         )
                     },
@@ -722,6 +752,35 @@ fun SettingsScreen(
                     InlineAction(
                         text = "管理",
                         onClick = { splashAppsOpen = true },
+                        enabled = !isPreview,
+                    )
+                }
+                ThinDivider(Modifier.padding(vertical = 12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("禁止应用跳转", style = MaterialTheme.typography.titleMedium)
+                        SettingHint(
+                            "点广告、推广位直接拉起别的 App 时，自动按返回退回原应用。" +
+                                "微信、支付宝、QQ、游戏和 Chrome/Edge 放行；小米浏览器按你的要求不放行。" +
+                                "退回目标应用会闪一下，这是非 root 方案做不到无感的地方。",
+                            detailed,
+                            Modifier.padding(top = 4.dp),
+                        )
+                        Text(
+                            text = "累计拦下 $jumpBlocked 次",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = jumpGuard,
+                        onCheckedChange = {
+                            jumpGuard = it
+                            JumpGuard.setEnabled(context, it)
+                        },
                         enabled = !isPreview,
                     )
                 }

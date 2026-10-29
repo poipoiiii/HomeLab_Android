@@ -61,6 +61,8 @@ data class AppSettings(
     val wallpaperOpacity: Float = 0.22f,
     val wallpaperDim: Float = 0.5f,
     val settingsDetailed: Boolean = true,
+    /** 首页天气卡的城市名，空字符串表示不显示天气卡。 */
+    val weatherCity: String = "",
 )
 
 class SettingsStore(private val context: Context) {
@@ -94,6 +96,7 @@ class SettingsStore(private val context: Context) {
         val WALLPAPER_OPACITY = floatPreferencesKey("wallpaper_opacity")
         val WALLPAPER_DIM = floatPreferencesKey("wallpaper_dim")
         val SETTINGS_DETAILED = booleanPreferencesKey("settings_detailed")
+        val WEATHER_CITY = stringPreferencesKey("weather_city")
     }
 
     val settings: Flow<AppSettings> = context.homelabDataStore.data
@@ -144,6 +147,7 @@ class SettingsStore(private val context: Context) {
                 wallpaperOpacity = (prefs[Keys.WALLPAPER_OPACITY] ?: 0.22f).coerceIn(0.05f, 0.9f),
                 wallpaperDim = (prefs[Keys.WALLPAPER_DIM] ?: 0.5f).coerceIn(0f, 0.8f),
                 settingsDetailed = prefs[Keys.SETTINGS_DETAILED] ?: true,
+                weatherCity = prefs[Keys.WEATHER_CITY].orEmpty(),
             )
         }
 
@@ -175,6 +179,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.WALLPAPER_OPACITY] = value.wallpaperOpacity
             prefs[Keys.WALLPAPER_DIM] = value.wallpaperDim
             prefs[Keys.SETTINGS_DETAILED] = value.settingsDetailed
+            prefs[Keys.WEATHER_CITY] = value.weatherCity.trim()
         }
     }
 }

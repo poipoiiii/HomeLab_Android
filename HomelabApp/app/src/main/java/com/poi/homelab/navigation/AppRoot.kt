@@ -72,6 +72,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -155,6 +157,11 @@ fun HomelabApp(viewModel: MainViewModel) {
             snackbar.showSnackbar(message)
             viewModel.clearMessage()
         }
+    }
+
+    // 回到前台重新探一次：家里主机可能刚从休眠醒来，VPN 也可能刚连上
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.probeReachability()
     }
 
     LaunchedEffect(exitArmed) {
@@ -280,6 +287,8 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onSaveTodos = viewModel::saveTodos,
                     onLoadWeather = viewModel::loadWeather,
                     onOpenFiles = { fileInsightOpen = true },
+                    onOpenCalendar = { openTab(Tab.Calendar) },
+                    onLoadDeviceUsage = viewModel::loadDeviceUsage,
                 )
                 Tab.Calendar -> CalendarScreen(
                     state = state,

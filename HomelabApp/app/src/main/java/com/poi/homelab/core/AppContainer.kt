@@ -15,6 +15,7 @@ import com.poi.homelab.feature.home.TodoStore
 import com.poi.homelab.feature.lab.LabRepository
 import com.poi.homelab.feature.lab.McpClient
 import com.poi.homelab.feature.photos.CloudreveRepository
+import com.poi.homelab.feature.weather.WeatherRepository
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -48,4 +49,5 @@ class AppContainer(context: android.content.Context) {
     val bill = BillRepository(http, json)
     val homarr = HomarrRepository(http, json)
     val cloudreve = CloudreveRepository(http)
+    val weather = WeatherRepository(http, json)
 }

@@ -1,6 +1,8 @@
 package com.poi.homelab.navigation
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
@@ -10,6 +12,8 @@ import com.poi.homelab.core.AppContainer
 import com.poi.homelab.core.settings.AppSettings
 import com.poi.homelab.core.settings.DEFAULT_LAB_URL
 import com.poi.homelab.core.ui.theme.Success
+import com.poi.homelab.core.util.Reachability
+import com.poi.homelab.core.util.ReachabilityProbe
 import com.poi.homelab.core.util.fileSize
 import com.poi.homelab.feature.ai.AgentTools
 import com.poi.homelab.feature.ai.AiAgent
@@ -46,19 +50,19 @@ import com.poi.homelab.feature.home.TodoItem
 import com.poi.homelab.feature.lab.HealthSnapshot
 import com.poi.homelab.feature.notify.NotifyPrefs
 import com.poi.homelab.feature.photos.PhotoAutoSync
+import com.poi.homelab.feature.weather.HomeWeather
 import java.io.IOException
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.time.YearMonth
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-import okhttp3.Request
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,9 +75,14 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 
 data class PendingAction(
     val name: String,
@@ -159,6 +168,9 @@ private fun String.guessMime(): String = when (importExtension()) {
     else -> "application/octet-stream"
 }
 
+/** 使用时长 / 存储排行的一行，值已经格式化成可直接显示的文本。 */
+data class UsageRank(val label: String, val value: String)
+
 data class UiState(
     val settings: AppSettings = AppSettings(),
     val health: HealthSnapshot? = null,
@@ -209,8 +221,17 @@ data class UiState(
     val appStatus: Map<String, Boolean> = emptyMap(),
     val loadingBoard: Boolean = false,
     val boardError: String? = null,
-    /** 实验室地址通不通；null 表示还没探测过。false 时首页切到「离家模式」。 */
-    val labReachable: Boolean? = null,
+    /** 实验室地址通不通以及原因；null 表示还没探测过。非 Online 时首页切到「离家模式」。 */
+    val labReachability: Reachability? = null,
+    /** 首页天气卡；没填城市时为 null。 */
+    val weather: HomeWeather? = null,
+    val loadingWeather: Boolean = false,
+    val weatherError: String? = null,
+    /** 设备使用时长 / 存储排行，展开首页「更多」时才拉。 */
+    val usageRows: List<UsageRank> = emptyList(),
+    val storageRows: List<UsageRank> = emptyList(),
+    val usageAccess: Boolean = true,
+    val loadingUsage: Boolean = false,
 )
 
 class MainViewModel(private val app: AppContainer) : ViewModel() {
@@ -227,8 +248,23 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
     private var uploadJob: Job? = null
     private var fileScanJob: Job? = null
     private var fileQueryToken = 0
+    private var probeJob: Job? = null
+
+    /** 网络 / VPN 一变就重探，这样切 Tailscale 后不用手动下拉刷新。 */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            probeReachability()
+        }
+
+        override fun onLost(network: Network) {
+            probeReachability()
+        }
+    }
+    private val connectivity = app.appContext
+        .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
 
     init {
+        runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
         viewModelScope.launch {
             val stored = app.chat.load()
             if (stored.isEmpty()) return@launch
@@ -279,37 +315,92 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         refreshBills()
         refreshBoard()
         probeReachability()
+        refreshWeather()
     }
 
     /**
      * 首页用：对已配置的地址发一次 HEAD，4 秒内拿不到任何响应就算断。
-     * 优先探 Lab，没配 Lab 就探账本、Homarr。tailscale 没连上时三者都会一起失败。
+     * 优先探 Lab，没配 Lab 就探账本、Homarr；失败原因由 [ReachabilityProbe] 分类。
      */
     fun probeReachability() {
-        val settings = _state.value.settings
-        val target = listOf(settings.labUrl, settings.billUrl, settings.homarrUrl)
-            .firstOrNull { it.isNotBlank() }
+        val target = listOf(
+            _state.value.settings.labUrl,
+            _state.value.settings.billUrl,
+            _state.value.settings.homarrUrl,
+        ).firstOrNull { it.isNotBlank() }
+        probeJob?.cancel()
         if (target == null) {
-            _state.update { it.copy(labReachable = null) }
+            _state.update { it.copy(labReachability = null) }
+            return
+        }
+        probeJob = viewModelScope.launch {
+            // 网络切换回调会连着触发几次，等稳定后再探
+            delay(600)
+            val result = ReachabilityProbe.probe(app.appContext, target, app.http)
+            _state.update { it.copy(labReachability = result) }
+        }
+    }
+
+    /** 首页天气卡：城市为空时不请求，失败只让卡片自己降级。 */
+    fun refreshWeather() {
+        val city = _state.value.settings.weatherCity.trim()
+        if (city.isBlank()) {
+            _state.update { it.copy(weather = null, weatherError = null, loadingWeather = false) }
             return
         }
         viewModelScope.launch {
-            val reachable = withContext(Dispatchers.IO) {
-                runCatching {
-                    val client = app.http.newBuilder()
-                        .connectTimeout(3, TimeUnit.SECONDS)
-                        .readTimeout(3, TimeUnit.SECONDS)
-                        .callTimeout(4, TimeUnit.SECONDS)
-                        .build()
-                    client.newCall(Request.Builder().url(target).head().build())
-                        .execute()
-                        .close()
-                    true
-                }.getOrDefault(false)
-            }
-            _state.update { it.copy(labReachable = reachable) }
+            _state.update { it.copy(loadingWeather = true, weatherError = null) }
+            runCatching { app.weather.current(city) }
+                .onSuccess { value ->
+                    _state.update { it.copy(weather = value, loadingWeather = false) }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(loadingWeather = false, weatherError = readable(error)) }
+                }
         }
     }
+
+    /** 首页「更多」里的设备排行，展开时才拉，避免每次刷新都扫一遍已安装应用。 */
+    fun loadDeviceUsage() {
+        if (_state.value.loadingUsage) return
+        viewModelScope.launch {
+            _state.update { it.copy(loadingUsage = true) }
+            val payload = runCatching { app.deviceTools.topUsageAndStorage(5) }.getOrNull()
+            if (payload == null) {
+                _state.update { it.copy(loadingUsage = false) }
+                return@launch
+            }
+            val access = payload["usage_access"]?.jsonPrimitive?.booleanOrNull ?: false
+            _state.update {
+                it.copy(
+                    usageAccess = access,
+                    usageRows = if (access) payload.rank("usage_top", "foreground_minutes", ::minutes) else emptyList(),
+                    storageRows = if (access) payload.rank("storage_top", "total_mb", ::megabytes) else emptyList(),
+                    loadingUsage = false,
+                )
+            }
+        }
+    }
+
+    private fun JsonObject.rank(
+        key: String,
+        valueKey: String,
+        format: (Double) -> String,
+    ): List<UsageRank> = (this[key] as? JsonArray).orEmpty().mapNotNull { element ->
+        val row = element as? JsonObject ?: return@mapNotNull null
+        val label = row["label"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: return@mapNotNull null
+        val value = row[valueKey]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+        UsageRank(label, format(value))
+    }
+
+    private fun minutes(value: Double): String {
+        val total = value.toInt()
+        return if (total >= 60) "${total / 60} 小时 ${total % 60} 分" else "$total 分钟"
+    }
+
+    private fun megabytes(value: Double): String =
+        if (value >= 1024) String.format(Locale.US, "%.1f GB", value / 1024) else "${value.toInt()} MB"
 
     /** 看板内容没有 REST GET，只能走 tRPC；app 列表单独取，两路并行。 */
     fun refreshBoard() {
@@ -1791,6 +1882,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             if (value.billUrl.isNotBlank()) refreshBills()
             if (value.homarrUrl.isNotBlank()) refreshBoard()
             probeReachability()
+            refreshWeather()
         }
     }
 
@@ -1897,6 +1989,11 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
 
     fun clearMessage() {
         _state.update { it.copy(message = null) }
+    }
+
+    override fun onCleared() {
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
+        super.onCleared()
     }
 
     private fun readable(error: Throwable): String {

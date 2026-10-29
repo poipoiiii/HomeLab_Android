@@ -46,6 +46,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -74,9 +75,12 @@ import com.poi.homelab.core.ui.components.PrimaryButton
 import com.poi.homelab.core.ui.components.SectionHeader
 import com.poi.homelab.core.ui.components.SecondaryButton
 import com.poi.homelab.core.ui.components.StatusDot
+import com.poi.homelab.core.ui.components.Tag
 import com.poi.homelab.core.ui.components.ThinDivider
 import com.poi.homelab.core.ui.theme.OnDarkSoft
 import com.poi.homelab.core.ui.theme.Warning
+import com.poi.homelab.core.util.Reachability
+import com.poi.homelab.core.util.ReachabilityState
 import com.poi.homelab.core.util.money
 import com.poi.homelab.core.util.todayLabel
 import com.poi.homelab.feature.automation.SplashSkip
@@ -114,11 +118,13 @@ fun HomeScreen(
     onSaveTodos: (List<TodoItem>) -> Unit,
     onLoadWeather: suspend (WeatherQuery) -> WeatherSnapshot? = { null },
     onOpenFiles: () -> Unit = {},
+    onOpenCalendar: () -> Unit = {},
+    onLoadDeviceUsage: () -> Unit = {},
 ) {
     val settings = state.settings
     val needsSetup = settings.labUrl.isBlank() && settings.billUrl.isBlank()
-    // 探测已配置地址失败（多半是 Tailscale 没连上），首页切到「离家模式」
-    val offline = state.labReachable == false
+    // 探测已配置地址失败时进「离家模式」，具体是没连 VPN 还是主机休眠由 ReachabilityProbe 判定
+    val offline = state.labReachability?.online == false
     val todoItems = state.todos.map { ChecklistItem(it.id, it.label) }
     var todoEditorOpen by rememberSaveable { mutableStateOf(false) }
     var powerOpen by rememberSaveable { mutableStateOf(false) }
@@ -126,6 +132,7 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val doneCount = todoItems.count { it.id in state.checkedToday }
     var quickSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var moreExpanded by rememberSaveable { mutableStateOf(false) }
     val quickSheetState = rememberModalBottomSheetState()
     val closeSheetThen: (() -> Unit) -> Unit = { action ->
         scope.launch {
@@ -155,6 +162,11 @@ fun HomeScreen(
     }
 
     BackHandler(enabled = powerOpen && powerUrl != null) { powerOpen = false }
+
+    // 设备排行要扫已安装应用，展开「更多」时才拉一次
+    LaunchedEffect(moreExpanded) {
+        if (moreExpanded) onLoadDeviceUsage()
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -207,7 +219,8 @@ fun HomeScreen(
     ) {
     // 下拉即刷新：不再需要标题栏的「刷新」按钮
     PullToRefreshBox(
-        isRefreshing = state.loadingBoard || state.loadingBills,
+        isRefreshing = state.loadingBoard || state.loadingBills ||
+            state.loadingHealth || state.loadingWeather,
         onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize(),
     ) {
@@ -224,6 +237,7 @@ fun HomeScreen(
                 item {
                     AwayModeCard(
                         state = state,
+                        reachability = state.labReachability,
                         onRetry = onRefresh,
                         onOpenSettings = onOpenSettings,
                     )
@@ -329,6 +343,55 @@ fun HomeScreen(
             }
 
             if (!offline) {
+                item {
+                    SectionHeader(
+                        title = "更多",
+                        subtitle = if (moreExpanded) null else "净资产 · 日程 · 主机 · 天气 · 设备",
+                        action = {
+                            InlineAction(
+                                text = if (moreExpanded) "收起" else "展开",
+                                onClick = { moreExpanded = !moreExpanded },
+                            )
+                        },
+                    )
+                }
+                if (moreExpanded) {
+                    state.overview?.let { overview ->
+                        item { NetWorthCard(overview = overview, onOpenBills = onOpenBills) }
+                    }
+                    item {
+                        UpcomingCalendarCard(
+                            entries = state.calendarEntries,
+                            onOpenCalendar = onOpenCalendar,
+                        )
+                    }
+                    state.health?.let { health ->
+                        item { HostHealthCard(health = health, onOpenServices = onOpenServices) }
+                    }
+                    if (settings.weatherCity.isNotBlank()) {
+                        item {
+                            HomeWeatherCard(
+                                weather = state.weather,
+                                error = state.weatherError,
+                                loading = state.loadingWeather,
+                                onRetry = onRefresh,
+                                onOpenSettings = onOpenSettings,
+                            )
+                        }
+                    }
+                    if (settings.photoAutoSync) {
+                        item { PhotoSyncCard(settings = settings, onOpenSettings = onOpenSettings) }
+                    }
+                    item {
+                        DeviceUsageCard(
+                            loading = state.loadingUsage,
+                            hasAccess = state.usageAccess,
+                            usageRows = state.usageRows,
+                            storageRows = state.storageRows,
+                            onOpenSettings = onOpenSettings,
+                        )
+                    }
+                }
                 item { AdOffCard() }
             }
         }
@@ -553,11 +616,12 @@ private fun HomeHeader(health: HealthSnapshot?) {
 
 /**
  * 离家模式：地址探测不通时顶掉看板和账本。
- * 虚线框当作门口那块地址牌，只写事实，不报警。
+ * 虚线框当作门口那块地址牌，写清是没连 VPN、主机休眠还是服务没起。
  */
 @Composable
 private fun AwayModeCard(
     state: UiState,
+    reachability: Reachability?,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -568,6 +632,7 @@ private fun AwayModeCard(
         ?: ""
     val host = target.substringAfter("://").substringBefore('/').substringBefore('?')
     val done = state.todos.count { it.id in state.checkedToday }
+    val cause = awayCause(reachability)
 
     Column(
         modifier = Modifier
@@ -585,6 +650,8 @@ private fun AwayModeCard(
             StatusDot(Warning, 9)
             Spacer(Modifier.width(8.dp))
             Text("离家模式", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.weight(1f))
+            Tag(cause.tag, Warning)
         }
         Text(
             text = host.ifBlank { "还没填地址" },
@@ -593,11 +660,24 @@ private fun AwayModeCard(
             modifier = Modifier.padding(top = 6.dp),
         )
         Text(
-            text = "4 秒没等到响应。多半是 Tailscale 没连上，也可能家里的机器在休眠。",
+            text = cause.headline,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 14.dp),
+        )
+        Text(
+            text = cause.hint,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 10.dp),
+            modifier = Modifier.padding(top = 6.dp),
         )
+        if (reachability?.state == ReachabilityState.Failed && !reachability.detail.isNullOrBlank()) {
+            Text(
+                text = reachability.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -625,6 +705,42 @@ private fun AwayModeCard(
             modifier = Modifier.padding(top = 4.dp),
         )
     }
+}
+
+private data class AwayCause(val tag: String, val headline: String, val hint: String)
+
+/** 把探测结果翻成用户能判断的一句话：没网、VPN 没连、主机睡了、服务没起。 */
+private fun awayCause(reachability: Reachability?): AwayCause = when (reachability?.state) {
+    ReachabilityState.NoNetwork -> AwayCause(
+        tag = "手机没网",
+        headline = "先联网",
+        hint = "手机现在没有可用网络，Wi-Fi 和流量都不通。连上之后再重试。",
+    )
+    ReachabilityState.VpnOff -> AwayCause(
+        tag = "VPN 未连接",
+        headline = "VPN 没连上",
+        hint = "手机到不了家里的内网地址。先打开 Tailscale，再点重试。",
+    )
+    ReachabilityState.HostAsleep -> AwayCause(
+        tag = "主机没应答",
+        headline = "VPN 连着，家里那台没有响应",
+        hint = "4 秒内没等到任何回应。多半是家里电脑在休眠，或它上面的 Tailscale 节点离线。",
+    )
+    ReachabilityState.ServiceDown -> AwayCause(
+        tag = "服务没起",
+        headline = "主机在线，服务没响应",
+        hint = "端口拒绝连接，主机是醒着的，检查容器或反向代理是不是停了。",
+    )
+    ReachabilityState.Failed -> AwayCause(
+        tag = "连接异常",
+        headline = "能连到主机，但握手失败",
+        hint = "检查地址、端口和证书配置。",
+    )
+    else -> AwayCause(
+        tag = "待判定",
+        headline = "还没探到家里",
+        hint = "4 秒没等到响应，重试一次看看。",
+    )
 }
 
 /** 首页的去广告总览：只管开屏跳过，数据也都是本机真实记下的。 */
