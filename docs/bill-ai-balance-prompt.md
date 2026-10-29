@@ -1,7 +1,35 @@
 # bill-ai 服务端改造提示词：账户余额新鲜度与候选余额核对
 
 > 用途：把本文件整段交给处理 bill-ai 服务端仓库的 AI / 开发同学，让它按下面的需求完成改造。
-> 背景：Android 端（HomelabApp）已把通知与短信原文上报到 `POST /api/ingest`，账本页/首页只消费 `/api/overview`。本次只改服务端，客户端暂不改代码。
+> 背景：Android 端（HomelabApp）已把通知与短信原文上报到 `POST /api/ingest`，账本页/首页只消费 `/api/overview`。原计划只改服务端，实际已同时落地客户端核对界面，见下方「实施结果」。
+
+---
+
+## 实施结果（2026-10-29）
+
+服务端与客户端均已按本文件落地，接口文档在 `homelab/bill-ai/API.md`。
+
+| 需求 | 状态 | 落地位置 |
+| --- | --- | --- |
+| 需求一 余额新鲜度 | 已完成 | `homelab/bill-ai/app/store.py`（`accounts.balance_updated_at` / `balance_source`、`account_balance_snapshots` 表） |
+| 需求二 候选余额识别 | 已完成 | `homelab/bill-ai/app/balance.py`（规则）+ `app/main.py`（`/api/ingest` 内先落候选） |
+| 需求三 核对接口 | 已完成 | `GET /api/balances/candidates`、`POST .../confirm`、`POST .../reject`；`/api/overview` 新增 `pending_balance_candidates` |
+| 需求四 截图 OCR 余额页 | 未实现（可选项） | 需要改动 `/api/extract` 的提示词与输出，留作后续单独处理 |
+| 需求五 定时任务与风控 | 已完成 | 启动后台任务每天把超过 7 天的 `pending` 置 `rejected`；日志截断并脱敏 |
+
+客户端（`homelab_android/HomelabApp`）改动：
+
+- `BillModels.kt` / `BillRepository.kt`：新增余额候选模型与三个接口；
+- `MainViewModel.kt`：刷新账本时同步拉候选，确认/驳回后刷新余额；
+- `BillsScreen.kt`：账单页「余额待确认」卡片（余额、偏差、异常标签、原文摘录、确认/驳回），未匹配账户时先弹账户选择；账户卡片显示 `balance_updated_at` / `balance_source`。
+
+实现细节与原始需求的差异：
+
+1. 确认后回写余额沿用现有「调整期初余额」的 `reconcile_account`，金额仍以整数分存储；`balance_updated_at` 取短信的 `observed_at`。
+2. 同一账户一次确认多条时只让 `observed_at` 最新的一条决定余额；迟到的旧候选不会覆盖更新的余额。
+3. `account_cards` 记录「发送方 + 尾号 → 账户」映射，确认后同尾号短信自动匹配。
+4. `raw_excerpt` 最多 80 字，8 位以上连续数字只保留后 4 位；`/api/ingest` 的余额识别异常只写日志，不影响 2xx。
+5. 单元测试在 `homelab/bill-ai/tests/test_balance.py`，覆盖金额解析（含千分位）、尾号提取、去重、确认回写、驳回与超期清理。
 
 ---
 

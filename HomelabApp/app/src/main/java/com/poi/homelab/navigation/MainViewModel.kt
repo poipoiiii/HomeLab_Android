@@ -24,6 +24,7 @@ import com.poi.homelab.feature.ai.DeviceTools
 import com.poi.homelab.feature.ai.PhotoUploadRequest
 import com.poi.homelab.feature.ai.requiresKey
 import com.poi.homelab.feature.bills.AnalysisResponse
+import com.poi.homelab.feature.bills.BalanceCandidate
 import com.poi.homelab.feature.bills.BillCommitResult
 import com.poi.homelab.feature.bills.BillImportHistory
 import com.poi.homelab.feature.bills.BillImportItem
@@ -176,6 +177,9 @@ data class UiState(
     val health: HealthSnapshot? = null,
     val overview: BillOverview? = null,
     val transactions: List<BillTransaction> = emptyList(),
+    val balanceCandidates: List<BalanceCandidate> = emptyList(),
+    val balanceCandidatesLoading: Boolean = false,
+    val balanceBusy: Boolean = false,
     val billMonth: String = YearMonth.now().toString(),
     val analysis: AnalysisResponse? = null,
     val loadingHealth: Boolean = false,
@@ -485,20 +489,24 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         val settings = _state.value.settings
         if (settings.billUrl.isBlank()) {
             _state.update {
-                it.copy(overview = null, transactions = emptyList(), message = "还没配置账本地址")
+                it.copy(
+                    overview = null,
+                    transactions = emptyList(),
+                    balanceCandidates = emptyList(),
+                    message = "还没配置账本地址",
+                )
             }
             return
         }
         val month = _state.value.billMonth
         viewModelScope.launch {
             _state.update { it.copy(loadingBills = true) }
-            runCatching {
-                coroutineScope {
+            try {
+                val (overview, page) = coroutineScope {
                     val overview = async { app.bill.overview(settings.billUrl, settings.token, month) }
                     val page = async { loadMonthTransactions(settings, month) }
                     overview.await() to page.await()
                 }
-            }.onSuccess { (overview, page) ->
                 _state.update {
                     it.copy(
                         overview = overview,
@@ -506,8 +514,78 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                         loadingBills = false,
                     )
                 }
-            }.onFailure { error ->
+                loadBalanceCandidates(settings)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 _state.update { it.copy(loadingBills = false, message = readable(error)) }
+            }
+        }
+    }
+
+    /** 余额候选列表；失败只保持原列表，不打扰首页。 */
+    private suspend fun loadBalanceCandidates(settings: AppSettings) {
+        if (settings.billUrl.isBlank()) return
+        _state.update { it.copy(balanceCandidatesLoading = true) }
+        runCatching { app.bill.balanceCandidates(settings.billUrl, settings.token) }
+            .onSuccess { page ->
+                _state.update {
+                    it.copy(
+                        balanceCandidates = page.items,
+                        balanceCandidatesLoading = false,
+                        overview = it.overview?.copy(pendingBalanceCandidates = page.pendingCount),
+                    )
+                }
+            }
+            .onFailure {
+                _state.update { it.copy(balanceCandidatesLoading = false) }
+            }
+    }
+
+    fun refreshBalanceCandidates() {
+        val settings = _state.value.settings
+        if (settings.billUrl.isBlank()) return
+        viewModelScope.launch { loadBalanceCandidates(settings) }
+    }
+
+    /** 确认一条候选；accountId 为空时沿用服务端已匹配的账户，否则把尾号候选指到该账户。 */
+    fun confirmBalanceCandidate(id: Long, accountId: Int? = null) {
+        if (_state.value.balanceBusy) return
+        val settings = _state.value.settings
+        if (settings.billUrl.isBlank()) return
+        viewModelScope.launch {
+            _state.update { it.copy(balanceBusy = true) }
+            runCatching {
+                app.bill.confirmBalanceCandidates(settings.billUrl, settings.token, listOf(id), accountId)
+            }.onSuccess { result ->
+                val item = result.items.firstOrNull()
+                val error = item?.error?.takeIf { it.isNotBlank() }
+                _state.update {
+                    it.copy(balanceBusy = false, message = error ?: "余额已更新")
+                }
+                refreshBills()
+            }.onFailure { error ->
+                _state.update { it.copy(balanceBusy = false, message = readable(error)) }
+            }
+        }
+    }
+
+    fun rejectBalanceCandidate(id: Long) {
+        if (_state.value.balanceBusy) return
+        val settings = _state.value.settings
+        if (settings.billUrl.isBlank()) return
+        viewModelScope.launch {
+            _state.update { it.copy(balanceBusy = true) }
+            runCatching {
+                app.bill.rejectBalanceCandidates(settings.billUrl, settings.token, listOf(id))
+            }.onSuccess { result ->
+                val error = result.items.firstOrNull()?.error?.takeIf { it.isNotBlank() }
+                _state.update {
+                    it.copy(balanceBusy = false, message = error ?: "已驳回这条余额")
+                }
+                refreshBills()
+            }.onFailure { error ->
+                _state.update { it.copy(balanceBusy = false, message = readable(error)) }
             }
         }
     }

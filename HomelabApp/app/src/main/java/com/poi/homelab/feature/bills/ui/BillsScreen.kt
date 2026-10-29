@@ -91,6 +91,7 @@ import com.poi.homelab.core.util.money
 import com.poi.homelab.core.util.monthLabel
 import com.poi.homelab.core.util.plainAmount
 import com.poi.homelab.core.util.typeLabel
+import com.poi.homelab.feature.bills.BalanceCandidate
 import com.poi.homelab.feature.bills.BillAccount
 import com.poi.homelab.feature.bills.BillOverview
 import com.poi.homelab.feature.bills.BillTransaction
@@ -135,6 +136,9 @@ fun BillsScreen(
     onRefresh: () -> Unit,
     onAnalysis: () -> Unit,
     onOpenImport: () -> Unit,
+    onRefreshBalance: () -> Unit = {},
+    onConfirmBalance: (Long, Int?) -> Unit = { _, _ -> },
+    onRejectBalance: (Long) -> Unit = {},
 ) {
     val overview = state.overview
     val months = remember { buildMonths(state.billMonth) }
@@ -154,6 +158,8 @@ fun BillsScreen(
     var showAllMerchants by rememberSaveable { mutableStateOf(false) }
     var analysisConfirm by rememberSaveable { mutableStateOf(false) }
     var dayDetail by rememberSaveable { mutableStateOf<String?>(null) }
+    // 只有尾号的候选在确认前要先选账户
+    var balancePicker by remember { mutableStateOf<BalanceCandidate?>(null) }
 
     val accounts = remember(overview, state.transactions) {
         (overview?.accounts?.map { it.name }.orEmpty() + state.transactions.map { it.account })
@@ -486,6 +492,27 @@ fun BillsScreen(
                             NetWorthCard(overview)
                         }
 
+                        val pendingBalances = overview.pendingBalanceCandidates
+                        if (pendingBalances > 0 || state.balanceCandidates.isNotEmpty()) {
+                            item {
+                                BalanceCandidatesCard(
+                                    candidates = state.balanceCandidates,
+                                    pendingCount = pendingBalances,
+                                    loading = state.balanceCandidatesLoading,
+                                    busy = state.balanceBusy,
+                                    onRefresh = onRefreshBalance,
+                                    onConfirm = { candidate ->
+                                        if (candidate.accountId == null) {
+                                            balancePicker = candidate
+                                        } else {
+                                            onConfirmBalance(candidate.id, null)
+                                        }
+                                    },
+                                    onReject = { candidate -> onRejectBalance(candidate.id) },
+                                )
+                            }
+                        }
+
                         if (overview.byCategory.isNotEmpty()) {
                             item {
                                 SectionHeader(
@@ -685,6 +712,59 @@ fun BillsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { analysisConfirm = false }) { Text("取消") }
+            },
+        )
+    }
+
+    val picker = balancePicker
+    if (picker != null) {
+        AlertDialog(
+            onDismissRequest = { balancePicker = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("这条余额属于哪个账户？") },
+            text = {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 340.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    overview?.accounts.orEmpty().forEach { account ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    balancePicker = null
+                                    onConfirmBalance(picker.id, account.id)
+                                }
+                                .padding(horizontal = 6.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = account.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = money(account.balance),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Muted,
+                            )
+                        }
+                    }
+                    if (overview?.accounts.isNullOrEmpty()) {
+                        Text(
+                            text = "账本里还没有账户，先去网页端建一个。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Muted,
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { balancePicker = null }) { Text("取消") }
             },
         )
     }
@@ -1688,6 +1768,137 @@ private fun FilterTab(
 }
 
 @Composable
+private fun BalanceCandidatesCard(
+    candidates: List<BalanceCandidate>,
+    pendingCount: Int,
+    loading: Boolean,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onConfirm: (BalanceCandidate) -> Unit,
+    onReject: (BalanceCandidate) -> Unit,
+) {
+    CreamCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("余额待确认", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = if (pendingCount > 0) {
+                        "$pendingCount 条 · 确认后才写入账户余额"
+                    } else {
+                        "短信与通知里的余额，确认后才写入账户余额"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            InlineAction("刷新", onRefresh, enabled = !loading)
+        }
+        if (loading && candidates.isEmpty()) {
+            LoadingRow("正在读取候选…")
+            return@CreamCard
+        }
+        if (candidates.isEmpty()) {
+            EmptyState("没有待确认的余额")
+            return@CreamCard
+        }
+        ThinDivider(Modifier.padding(top = 12.dp, bottom = 2.dp))
+        candidates.forEachIndexed { index, candidate ->
+            BalanceCandidateRow(
+                candidate = candidate,
+                busy = busy,
+                onConfirm = { onConfirm(candidate) },
+                onReject = { onReject(candidate) },
+            )
+            if (index != candidates.lastIndex) ThinDivider()
+        }
+    }
+}
+
+@Composable
+private fun BalanceCandidateRow(
+    candidate: BalanceCandidate,
+    busy: Boolean,
+    onConfirm: () -> Unit,
+    onReject: () -> Unit,
+) {
+    val delta = candidate.delta?.let { plainAmount(it) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = candidate.accountName.ifBlank { "尾号 ${candidate.cardTail}" },
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = "${balanceSourceLabel(candidate.source)} · ${shortIso(candidate.observedAt)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(money(candidate.balance), style = MaterialTheme.typography.titleMedium)
+                if (delta != null) {
+                    Text(
+                        text = (if (delta >= 0) "+" else "−") + money(kotlin.math.abs(delta)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (delta >= 0) SuccessStrong else Coral,
+                        modifier = Modifier.padding(top = 1.dp),
+                    )
+                }
+            }
+        }
+        if (candidate.rawExcerpt.isNotBlank()) {
+            Text(
+                text = candidate.rawExcerpt,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (candidate.anomaly) Tag("偏差超过一半", Coral)
+            if (candidate.accountId == null) {
+                Tag("未匹配账户", MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.weight(1f))
+            InlineAction(
+                text = "驳回",
+                onClick = onReject,
+                enabled = !busy,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            InlineAction(
+                text = if (candidate.accountId == null) "选账户确认" else "确认",
+                onClick = onConfirm,
+                enabled = !busy,
+            )
+        }
+    }
+}
+
+private fun balanceSourceLabel(source: String?): String = when (source) {
+    "sms" -> "短信"
+    "notification" -> "通知"
+    "ocr" -> "截图识别"
+    "manual" -> "手工"
+    else -> "未知来源"
+}
+
+/** "2026-10-29T21:10:00+08:00" → "10-29 21:10"；只有日期时原样返回。 */
+private fun shortIso(value: String?): String {
+    if (value.isNullOrBlank()) return "时间未知"
+    return if (value.length >= 16) value.substring(5, 16).replace('T', ' ') else value
+}
+
+@Composable
 private fun AccountChip(account: BillAccount) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -1707,6 +1918,17 @@ private fun AccountChip(account: BillAccount) {
                 color = SuccessStrong,
                 modifier = Modifier.padding(top = 4.dp),
             )
+            Text(
+                text = if (account.balanceUpdatedAt.isNullOrBlank()) {
+                    "余额未确认"
+                } else {
+                    "${balanceSourceLabel(account.balanceSource)} · ${shortIso(account.balanceUpdatedAt)}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Muted,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }
+

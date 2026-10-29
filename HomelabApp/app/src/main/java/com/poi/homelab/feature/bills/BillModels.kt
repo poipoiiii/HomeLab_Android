@@ -12,6 +12,8 @@ data class BillAccount(
     val id: Int = 0,
     val name: String = "",
     val balance: String = "0.00",
+    @SerialName("balance_updated_at") val balanceUpdatedAt: String? = null,
+    @SerialName("balance_source") val balanceSource: String? = null,
 )
 
 @Serializable
@@ -73,6 +75,7 @@ data class TransactionPage(
 data class BillOverview(
     val month: String = "",
     val accounts: List<BillAccount> = emptyList(),
+    @SerialName("pending_balance_candidates") val pendingBalanceCandidates: Int = 0,
     @SerialName("net_worth") val netWorth: String = "0.00",
     @SerialName("month_stats") val monthStats: MonthStats = MonthStats(),
     @SerialName("by_category") val byCategory: List<CategoryAmount> = emptyList(),
@@ -176,4 +179,51 @@ data class BillCommitResult(
     val skipped: Int = 0,
     val failed: Int = 0,
     val details: List<BillCommitDetail> = emptyList(),
+)
+
+/* ---------------------------- balance candidates ---------------------------- */
+
+/** 短信 / 通知识别出的余额候选，确认后才回写账户余额。 */
+@Serializable
+data class BalanceCandidate(
+    val id: Long = 0,
+    @SerialName("account_id") val accountId: Int? = null,
+    @SerialName("account_name") val accountName: String = "",
+    @SerialName("card_tail") val cardTail: String = "",
+    val balance: String = "0.00",
+    val currency: String = "CNY",
+    val source: String = "",
+    @SerialName("observed_at") val observedAt: String = "",
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("raw_excerpt") val rawExcerpt: String = "",
+    @SerialName("current_balance") val currentBalance: String? = null,
+    val delta: String? = null,
+    val anomaly: Boolean = false,
+)
+
+@Serializable
+data class BalanceCandidatePage(
+    val items: List<BalanceCandidate> = emptyList(),
+    @SerialName("pending_count") val pendingCount: Int = 0,
+)
+
+@Serializable
+data class BalanceActionRequest(
+    val ids: List<Long>,
+    @SerialName("account_id") val accountId: Int? = null,
+)
+
+@Serializable
+data class BalanceActionItem(
+    val id: Long = 0,
+    val status: String = "",
+    @SerialName("account_id") val accountId: Int? = null,
+    val balance: String = "",
+    val error: String = "",
+)
+
+@Serializable
+data class BalanceActionResult(
+    val items: List<BalanceActionItem> = emptyList(),
+    @SerialName("pending_count") val pendingCount: Int = 0,
 )

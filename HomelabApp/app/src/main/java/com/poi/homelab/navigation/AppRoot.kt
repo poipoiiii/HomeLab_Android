@@ -307,6 +307,9 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onRefresh = viewModel::refreshBills,
                     onAnalysis = viewModel::loadAnalysis,
                     onOpenImport = { billImportOpen = true },
+                    onRefreshBalance = viewModel::refreshBalanceCandidates,
+                    onConfirmBalance = viewModel::confirmBalanceCandidate,
+                    onRejectBalance = viewModel::rejectBalanceCandidate,
                 )
                 Tab.Ai -> AiScreen(
                     state = state,

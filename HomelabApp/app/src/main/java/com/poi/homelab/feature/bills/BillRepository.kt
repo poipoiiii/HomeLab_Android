@@ -129,6 +129,44 @@ class BillRepository(
             json.decodeFromString<AnalysisResponse>(body)
         }
 
+    /** 短信 / 通知识别出的余额候选，默认只看待确认。 */
+    suspend fun balanceCandidates(
+        baseUrl: String,
+        token: String,
+        status: String = "pending",
+        limit: Int = 50,
+    ): BalanceCandidatePage = withContext(Dispatchers.IO) {
+        val body = get(
+            baseUrl,
+            "/api/balances/candidates",
+            listOf("status" to status, "limit" to limit.toString()),
+            token,
+        )
+        json.decodeFromString<BalanceCandidatePage>(body)
+    }
+
+    /** 确认候选；accountId 只用于把「只有尾号」的候选指定到某个账户。 */
+    suspend fun confirmBalanceCandidates(
+        baseUrl: String,
+        token: String,
+        ids: List<Long>,
+        accountId: Int? = null,
+    ): BalanceActionResult = withContext(Dispatchers.IO) {
+        val payload = json.encodeToString(BalanceActionRequest(ids = ids, accountId = accountId))
+        val body = post(baseUrl, "/api/balances/candidates/confirm", token, payload)
+        json.decodeFromString<BalanceActionResult>(body)
+    }
+
+    suspend fun rejectBalanceCandidates(
+        baseUrl: String,
+        token: String,
+        ids: List<Long>,
+    ): BalanceActionResult = withContext(Dispatchers.IO) {
+        val payload = json.encodeToString(BalanceActionRequest(ids = ids))
+        val body = post(baseUrl, "/api/balances/candidates/reject", token, payload)
+        json.decodeFromString<BalanceActionResult>(body)
+    }
+
     private fun get(
         baseUrl: String,
         path: String,
@@ -143,6 +181,24 @@ class BillRepository(
             .get()
             .apply {
                 if (!token.isNullOrBlank()) header("Authorization", "Bearer ${token.trim()}")
+            }
+            .build()
+
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IOException(errorDetail(body, response.code))
+            }
+            return body
+        }
+    }
+
+    private fun post(baseUrl: String, path: String, token: String, payload: String): String {
+        val request = Request.Builder()
+            .url(urlFor(baseUrl, path))
+            .post(payload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
+            .apply {
+                if (token.isNotBlank()) header("Authorization", "Bearer ${token.trim()}")
             }
             .build()
 
