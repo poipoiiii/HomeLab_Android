@@ -31,6 +31,17 @@ fun signedMoney(value: String?, type: String): String {
 fun plainAmount(value: String?): Double =
     value?.replace(",", "")?.toDoubleOrNull() ?: 0.0
 
+/** 字节数转成 KB/MB/GB/TB，用于上传进度、速度和文件统计。 */
+fun fileSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L * 1024L ->
+        String.format(Locale.CHINA, "%.1f TB", bytes / 1099511627776.0)
+    bytes >= 1024L * 1024L * 1024L ->
+        String.format(Locale.CHINA, "%.1f GB", bytes / 1073741824.0)
+    bytes >= 1024L * 1024L -> String.format(Locale.CHINA, "%.1f MB", bytes / 1048576.0)
+    bytes >= 1024L -> "${bytes / 1024} KB"
+    else -> "$bytes B"
+}
+
 fun monthLabel(month: String): String {
     return runCatching {
         val parsed = YearMonth.parse(month)

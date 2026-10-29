@@ -17,6 +17,7 @@ import com.google.adk.kt.types.GenerateContentConfig
 import com.google.adk.kt.types.HttpOptions
 import com.google.adk.kt.types.Part
 import com.google.adk.kt.types.Role
+import java.io.IOException
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
@@ -135,6 +136,52 @@ class AiAgent(
     /** 清空对话时同时丢掉 ADK 会话，下次发送会重新按本地记录建会话。 */
     suspend fun clearHistory() {
         sessionService.deleteSession(SessionKey(APP_NAME, USER_ID, SESSION_ID))
+    }
+
+    /**
+     * 文件洞察页的一键分析：直接把统计摘要交给模型，不进入聊天会话、不调用工具。
+     * 摘要已经在本地裁到 6000 字符以内。
+     */
+    suspend fun analyzeFileInsight(provider: AiProvider, brief: String): String {
+        if (provider.baseUrl.isBlank() || provider.model.isBlank()) {
+            throw IOException("AI 服务商还没有配置好")
+        }
+        if (provider.apiKey.isBlank() && provider.requiresKey) {
+            throw IOException("还没有填写 API Key")
+        }
+        if (brief.isBlank()) throw IOException("还没有可分析的文件统计")
+
+        val prompt = """
+            你是小砂糖，正在帮 poi 看这台手机的文件统计。下面是本机可访问文件的元数据摘要，
+            只包含文件名、路径、大小、时间和类型，没有文件内容。
+
+            请用中文输出一份简洁的分析，按这几个小标题组织（用 Markdown）：
+            1. 结论：一两句话说明空间整体情况。
+            2. 空间去向：哪类文件、哪些目录最占空间。
+            3. 可以清理：按收益从高到低给出建议，标明风险（可安全删 / 建议先确认）。
+            4. 别急着动：哪些看起来大但建议保留。
+            5. 隐私提醒：如果文件名疑似证件、密码、合同等，只提醒用户注意，不要判断内容。
+            要求：
+            - 只根据摘要里出现的信息，不要编造文件名或数字。
+            - 摘要被截断时明确说明结果不完整。
+            - 不能承诺删除文件，这只是建议。
+            - 不要用“作为 AI”这类腔调，直接说事。
+
+            文件统计摘要：
+            $brief
+        """.trimIndent()
+
+        val request = LlmRequest(
+            contents = listOf(Content(role = Role.USER, parts = listOf(Part(text = prompt)))),
+            config = GenerateContentConfig(temperature = 0.3f),
+        )
+        val text = model(provider, timeoutSeconds = 120)
+            .generateContent(request, stream = false)
+            .toList()
+            .mapNotNull { it.content?.text() }
+            .joinToString("")
+        if (text.isBlank()) throw IOException("模型没有返回分析结果")
+        return text
     }
 
     /** 首次发送时用已保存的对话补齐上下文，让 AI 能接着上次聊。 */

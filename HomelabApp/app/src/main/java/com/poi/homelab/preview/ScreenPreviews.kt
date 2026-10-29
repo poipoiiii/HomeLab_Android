@@ -18,6 +18,13 @@ import com.poi.homelab.feature.calendar.CALENDAR_IMPORTANT
 import com.poi.homelab.feature.calendar.CALENDAR_TRAVEL
 import com.poi.homelab.feature.calendar.CalendarEntry
 import com.poi.homelab.feature.calendar.ui.CalendarScreen
+import com.poi.homelab.feature.files.CategoryStat
+import com.poi.homelab.feature.files.DirStat
+import com.poi.homelab.feature.files.DuplicateGroup
+import com.poi.homelab.feature.files.FileCategory
+import com.poi.homelab.feature.files.FileEntry
+import com.poi.homelab.feature.files.FileInsight
+import com.poi.homelab.feature.files.ui.FileInsightScreen
 import com.poi.homelab.feature.home.ui.HomeScreen
 import com.poi.homelab.feature.lab.ContainerInfo
 import com.poi.homelab.feature.lab.DiskInfo
@@ -27,6 +34,7 @@ import com.poi.homelab.feature.lab.LabSummary
 import com.poi.homelab.feature.lab.ui.DownloadsScreen
 import com.poi.homelab.feature.lab.ui.ServicesScreen
 import com.poi.homelab.feature.settings.ui.SettingsScreen
+import com.poi.homelab.navigation.FileUiState
 import com.poi.homelab.navigation.UiState
 import java.time.LocalDate
 import java.time.YearMonth
@@ -226,6 +234,92 @@ private val previewState = UiState(
 
 private val previewEmptyState = UiState(settings = previewSettings)
 
+private val previewFileEntries = listOf(
+    FileEntry(
+        path = "DCIM/Camera/2024_trip.mp4",
+        name = "2024_trip.mp4",
+        size = 4_200_000_000,
+        modified = System.currentTimeMillis() - 40L * 86400_000,
+        mime = "video/mp4",
+    ),
+    FileEntry(
+        path = "Download/backup.zip",
+        name = "backup.zip",
+        size = 3_800_000_000,
+        modified = System.currentTimeMillis() - 8L * 86400_000,
+        mime = "application/zip",
+    ),
+    FileEntry(
+        path = "Documents/租房合同.pdf",
+        name = "租房合同.pdf",
+        size = 2_400_000,
+        modified = System.currentTimeMillis() - 2L * 86400_000,
+        mime = "application/pdf",
+    ),
+    FileEntry(
+        path = "Pictures/Screenshots/Screenshot_20261001.png",
+        name = "Screenshot_20261001.png",
+        size = 1_200_000,
+        modified = System.currentTimeMillis() - 86400_000,
+        mime = "image/png",
+    ),
+)
+
+private val previewFileInsight = FileInsight(
+    rootName = "DCIM",
+    deviceName = "Pixel 9",
+    scannedAt = System.currentTimeMillis() - 3_600_000,
+    durationMs = 86_000,
+    totalFiles = 31_204,
+    totalDirs = 2_418,
+    totalBytes = 128L * 1024 * 1024 * 1024,
+    freeBytes = 127L * 1024 * 1024 * 1024,
+    storageTotalBytes = 256L * 1024 * 1024 * 1024,
+    categories = listOf(
+        CategoryStat(FileCategory.Image, 12_400, 54L * 1024 * 1024 * 1024),
+        CategoryStat(FileCategory.Video, 320, 60L * 1024 * 1024 * 1024),
+        CategoryStat(FileCategory.Document, 8_000, 8L * 1024 * 1024 * 1024),
+        CategoryStat(FileCategory.Other, 10_484, 6L * 1024 * 1024 * 1024),
+    ),
+    topDirs = listOf(
+        DirStat("DCIM", 12_000, 82L * 1024 * 1024 * 1024),
+        DirStat("Download", 900, 21L * 1024 * 1024 * 1024),
+        DirStat("Documents", 1_200, 9L * 1024 * 1024 * 1024),
+    ),
+    largest = previewFileEntries,
+    duplicates = listOf(
+        DuplicateGroup(
+            name = "IMG_0001.jpg",
+            size = 2_400_000,
+            files = previewFileEntries.take(2),
+        ),
+    ),
+    duplicateCount = 23,
+    duplicateBytes = 1_800_000_000,
+    tempFiles = previewFileEntries.drop(1).take(1),
+    tempCount = 38,
+    tempBytes = 640_000_000,
+    oldLarge = previewFileEntries.take(1),
+    oldLargeCount = 4,
+    oldLargeBytes = 4_200_000_000,
+    sensitive = previewFileEntries.drop(2).take(1),
+    sensitiveCount = 6,
+    truncated = false,
+    skippedDirs = emptyList(),
+)
+
+private val previewFileState = previewState.copy(
+    settings = previewSettings.copy(fileTreeUris = listOf("content://preview/dcim")),
+    files = FileUiState(
+        insight = previewFileInsight,
+        indexLoaded = true,
+        scannedFiles = previewFileInsight.totalFiles,
+        rows = previewFileEntries,
+        totalMatches = previewFileInsight.totalFiles,
+        shown = previewFileEntries.size,
+    ),
+)
+
 @Preview(name = "总览 · 浅色", showBackground = true, widthDp = 390, heightDp = 844)
 @Composable
 private fun HomePreview() {
@@ -305,6 +399,31 @@ private fun SettingsPreview() {
             onWallpaperOpacity = {},
             onWallpaperDim = {},
             onSettingsDetailed = {},
+            isPreview = true,
+        )
+    }
+}
+
+@Preview(name = "文件洞察", showBackground = true, widthDp = 390, heightDp = 900)
+@Composable
+private fun FileInsightPreview() {
+    HomelabTheme("light") {
+        FileInsightScreen(
+            state = previewFileState,
+            onLoad = {},
+            onClose = {},
+            onRootSelected = {},
+            onRootRemoved = {},
+            onScan = {},
+            onCancelScan = {},
+            onViewChange = {},
+            onCategoryChange = {},
+            onQueryChange = {},
+            onSortChange = {},
+            onLoadMore = {},
+            onAnalyze = {},
+            onShowAnalysis = {},
+            onCloseAnalysis = {},
             isPreview = true,
         )
     }

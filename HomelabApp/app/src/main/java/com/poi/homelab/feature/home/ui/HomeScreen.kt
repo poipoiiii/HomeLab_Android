@@ -39,6 +39,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDrawerState
@@ -52,9 +53,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,10 +72,14 @@ import com.poi.homelab.core.ui.components.InlineAction
 import com.poi.homelab.core.ui.components.LoadingRow
 import com.poi.homelab.core.ui.components.PrimaryButton
 import com.poi.homelab.core.ui.components.SectionHeader
+import com.poi.homelab.core.ui.components.SecondaryButton
+import com.poi.homelab.core.ui.components.StatusDot
 import com.poi.homelab.core.ui.components.ThinDivider
 import com.poi.homelab.core.ui.theme.OnDarkSoft
+import com.poi.homelab.core.ui.theme.Warning
 import com.poi.homelab.core.util.money
 import com.poi.homelab.core.util.todayLabel
+import com.poi.homelab.feature.automation.SplashSkip
 import com.poi.homelab.feature.bills.MonthStats
 import com.poi.homelab.feature.bills.ui.TransactionRow
 import com.poi.homelab.feature.homarr.resolveHomarrUrl
@@ -103,9 +113,12 @@ fun HomeScreen(
     onToggleChecklist: (String) -> Unit,
     onSaveTodos: (List<TodoItem>) -> Unit,
     onLoadWeather: suspend (WeatherQuery) -> WeatherSnapshot? = { null },
+    onOpenFiles: () -> Unit = {},
 ) {
     val settings = state.settings
     val needsSetup = settings.labUrl.isBlank() && settings.billUrl.isBlank()
+    // 探测已配置地址失败（多半是 Tailscale 没连上），首页切到「离家模式」
+    val offline = state.labReachable == false
     val todoItems = state.todos.map { ChecklistItem(it.id, it.label) }
     var todoEditorOpen by rememberSaveable { mutableStateOf(false) }
     var powerOpen by rememberSaveable { mutableStateOf(false) }
@@ -207,7 +220,18 @@ fun HomeScreen(
                 HomeHeader(health = state.health)
             }
 
-            if (needsSetup) {
+            if (offline) {
+                item {
+                    AwayModeCard(
+                        state = state,
+                        onRetry = onRefresh,
+                        onOpenSettings = onOpenSettings,
+                    )
+                }
+                item { AdOffCard() }
+            }
+
+            if (!offline && needsSetup) {
                 item {
                     CreamCard {
                         Text("先连上你的实验室", style = MaterialTheme.typography.titleLarge)
@@ -222,7 +246,7 @@ fun HomeScreen(
                 }
             }
 
-            if (settings.homarrUrl.isNotBlank()) {
+            if (!offline && settings.homarrUrl.isNotBlank()) {
                 item {
                     when {
                         state.board != null -> HomarrBoardGrid(
@@ -255,7 +279,7 @@ fun HomeScreen(
                         else -> CreamCard { EmptyState("看板没有返回数据") }
                     }
                 }
-            } else {
+            } else if (!offline) {
                 item {
                     QuickEntryPager(
                         cards = listOf(
@@ -274,7 +298,7 @@ fun HomeScreen(
                 }
             }
 
-            if (settings.billUrl.isNotBlank() && settings.showLedgerOnHome) {
+            if (!offline && settings.billUrl.isNotBlank() && settings.showLedgerOnHome) {
                 item {
                     LedgerCard(
                         state = state,
@@ -284,7 +308,7 @@ fun HomeScreen(
                 }
             }
 
-            if (settings.showLedgerOnHome) {
+            if (!offline && settings.showLedgerOnHome) {
                 val overview = state.overview
                 if (overview != null && overview.recent.isNotEmpty()) {
                     item {
@@ -302,6 +326,10 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+
+            if (!offline) {
+                item { AdOffCard() }
             }
         }
         if (powerUrl != null) {
@@ -366,6 +394,12 @@ fun HomeScreen(
                         title = "今天清单",
                         subtitle = "完成 $doneCount/${todoItems.size} 项",
                         onClick = { closeSheetThen { scope.launch { drawerState.open() } } },
+                    )
+                    ThinDivider()
+                    QuickActionRow(
+                        title = "文件洞察",
+                        subtitle = "扫描本机文件，让小砂糖分析",
+                        onClick = { closeSheetThen(onOpenFiles) },
                     )
                     if (powerUrl != null) {
                         ThinDivider()
@@ -514,6 +548,123 @@ private fun HomeHeader(health: HealthSnapshot?) {
                 }
             }
         }
+    }
+}
+
+/**
+ * 离家模式：地址探测不通时顶掉看板和账本。
+ * 虚线框当作门口那块地址牌，只写事实，不报警。
+ */
+@Composable
+private fun AwayModeCard(
+    state: UiState,
+    onRetry: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val outline = MaterialTheme.colorScheme.outlineVariant
+    val dash = remember { PathEffect.dashPathEffect(floatArrayOf(13f, 11f), 0f) }
+    val target = listOf(state.settings.labUrl, state.settings.billUrl, state.settings.homarrUrl)
+        .firstOrNull { it.isNotBlank() }
+        ?: ""
+    val host = target.substringAfter("://").substringBefore('/').substringBefore('?')
+    val done = state.todos.count { it.id in state.checkedToday }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawRoundRect(
+                    color = outline,
+                    cornerRadius = CornerRadius(18.dp.toPx()),
+                    style = Stroke(width = 1.5.dp.toPx(), pathEffect = dash),
+                )
+            }
+            .padding(18.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(Warning, 9)
+            Spacer(Modifier.width(8.dp))
+            Text("离家模式", style = MaterialTheme.typography.headlineSmall)
+        }
+        Text(
+            text = host.ifBlank { "还没填地址" },
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Text(
+            text = "4 秒没等到响应。多半是 Tailscale 没连上，也可能家里的机器在休眠。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            PrimaryButton("重试", onRetry, Modifier.weight(1f))
+            SecondaryButton("检查地址", onOpenSettings, Modifier.weight(1f))
+        }
+        ThinDivider(Modifier.padding(top = 18.dp, bottom = 14.dp))
+        Text("离线还能用", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "清单：完成 $done/${state.todos.size} 项",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        val overview = state.overview
+        Text(
+            text = if (overview != null) {
+                "账本：本月支出 ${money(overview.monthStats.expense)}（上次读取）"
+            } else {
+                "账本：要联网才能刷新"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+/** 首页的去广告总览：只管开屏跳过，数据也都是本机真实记下的。 */
+@Composable
+private fun AdOffCard() {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(SplashSkip.isEnabled(context)) }
+    val skipped = SplashSkip.todayCount(context)
+    CreamCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("去广告", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = when {
+                        !enabled -> "关着，开屏广告不会自动跳过"
+                        skipped > 0 -> "今天替你跳过 $skipped 次开屏"
+                        else -> "今天还没遇到需要跳过的开屏"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = {
+                    enabled = it
+                    SplashSkip.setEnabled(context, it)
+                },
+            )
+        }
+        Text(
+            text = "覆盖 ${SplashSkip.packages(context).size} 个应用，可以在设置里加。营销通知和广告包是在电脑上那个工具关的，这里只负责开屏。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 10.dp),
+        )
     }
 }
 

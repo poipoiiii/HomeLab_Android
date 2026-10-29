@@ -101,6 +101,7 @@ import com.poi.homelab.feature.bills.Insight
 import com.poi.homelab.feature.bills.ui.BillImportScreen
 import com.poi.homelab.feature.bills.ui.BillsScreen
 import com.poi.homelab.feature.calendar.ui.CalendarScreen
+import com.poi.homelab.feature.files.ui.FileInsightScreen
 import com.poi.homelab.feature.home.ui.HomeScreen
 import com.poi.homelab.feature.lab.ui.DownloadsScreen
 import com.poi.homelab.feature.lab.ui.ServicesScreen
@@ -141,6 +142,7 @@ fun HomelabApp(viewModel: MainViewModel) {
     var aiConfigOpen by rememberSaveable { mutableStateOf(false) }
     var browserUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var billImportOpen by rememberSaveable { mutableStateOf(false) }
+    var fileInsightOpen by rememberSaveable { mutableStateOf(false) }
     var exitArmed by rememberSaveable { mutableStateOf(false) }
     val tabCenters = remember { mutableStateMapOf<Tab, Offset>() }
     var contentBounds by remember { mutableStateOf(Rect.Zero) }
@@ -277,6 +279,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onToggleChecklist = viewModel::toggleChecklist,
                     onSaveTodos = viewModel::saveTodos,
                     onLoadWeather = viewModel::loadWeather,
+                    onOpenFiles = { fileInsightOpen = true },
                 )
                 Tab.Calendar -> CalendarScreen(
                     state = state,
@@ -315,8 +318,9 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onTest = viewModel::testConnections,
                     onTheme = viewModel::setThemeMode,
                     onOpenAiSettings = { aiConfigOpen = true },
-                    onFileTreeSelected = viewModel::setFileTreeUri,
+                    onFileTreeSelected = viewModel::addFileTreeUri,
                     onClearFileTree = viewModel::clearFileTree,
+                    onOpenFiles = { fileInsightOpen = true },
                     onShowLedger = viewModel::setShowLedgerOnHome,
                     onShowWallpaper = viewModel::setShowWallpaper,
                     onWallpaperOpacity = viewModel::setWallpaperOpacity,
@@ -341,6 +345,25 @@ fun HomelabApp(viewModel: MainViewModel) {
             onCommit = viewModel::commitBillImport,
             onClear = viewModel::clearBillImport,
             onRefreshCloud = viewModel::refreshBillImportCloud,
+        )
+    }
+    if (fileInsightOpen) {
+        FileInsightScreen(
+            state = state,
+            onLoad = viewModel::loadFileInsight,
+            onClose = { fileInsightOpen = false },
+            onRootSelected = viewModel::addFileTreeUri,
+            onRootRemoved = viewModel::removeFileTreeUri,
+            onScan = viewModel::startFileScan,
+            onCancelScan = viewModel::cancelFileScan,
+            onViewChange = viewModel::setFileView,
+            onCategoryChange = viewModel::setFileCategory,
+            onQueryChange = viewModel::setFileQuery,
+            onSortChange = viewModel::setFileSort,
+            onLoadMore = viewModel::loadMoreFiles,
+            onAnalyze = viewModel::analyzeFiles,
+            onShowAnalysis = viewModel::showFileAnalysis,
+            onCloseAnalysis = viewModel::closeFileAnalysis,
         )
     }
     }

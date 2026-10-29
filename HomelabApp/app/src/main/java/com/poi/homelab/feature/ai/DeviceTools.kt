@@ -53,6 +53,8 @@ data class PhotoFile(
     val name: String,
     val album: String,
     val addedAt: Long,
+    /** 拍摄/创建时间（DATE_TAKEN，缺省回退 DATE_ADDED），上传时按它分日期目录。 */
+    val capturedAt: Long,
     val sizeBytes: Long,
     val width: Int,
     val height: Int,
@@ -180,23 +182,14 @@ class DeviceTools(private val context: Context) {
         }
 
     suspend fun findFiles(
-        treeUri: String,
+        treeUris: List<String>,
         query: String,
         extensions: List<String>,
         limit: Int,
     ): JsonObject = withContext(Dispatchers.IO) {
-        if (treeUri.isBlank()) {
+        if (treeUris.isEmpty()) {
             return@withContext buildJsonObject {
-                put("error", "还没有选择可搜索目录，请到设置里选择")
-                put("read_only", true)
-            }
-        }
-        val root = runCatching {
-            DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
-        }.getOrNull()
-        if (root == null) {
-            return@withContext buildJsonObject {
-                put("error", "目录授权已失效，请重新选择")
+                put("error", "还没有选择可搜索文件夹，请到设置里选择")
                 put("read_only", true)
             }
         }
@@ -205,50 +198,72 @@ class DeviceTools(private val context: Context) {
         val exts = extensions
             .map { it.trim().removePrefix(".").lowercase() }
             .filter { it.isNotBlank() }
-        val maxVisited = 5000
+        val maxVisitedPerRoot = 5000
         val matches = mutableListOf<JsonObject>()
+        val roots = mutableListOf<String>()
+        val skippedRoots = mutableListOf<String>()
         var scanned = 0
         var truncated = false
-        val stack = ArrayDeque<DocumentFile>()
-        stack.add(root)
+        var limitReached = false
 
-        while (stack.isNotEmpty()) {
-            val directory = stack.removeLast()
-            val children = runCatching { directory.listFiles() }.getOrNull().orEmpty()
-            for (child in children) {
-                scanned++
-                if (scanned > maxVisited) {
-                    truncated = true
-                    break
-                }
-                if (child.isDirectory) {
-                    stack.add(child)
-                    continue
-                }
-                val name = child.name ?: continue
-                if (keyword.isNotEmpty() && !name.contains(keyword, ignoreCase = true)) continue
-                if (exts.isNotEmpty() && exts.none { name.lowercase().endsWith(".$it") }) continue
-                matches += buildJsonObject {
-                    put("name", name)
-                    put("uri", child.uri.toString())
-                    put("size_mb", mb(child.length()))
-                    put("modified", formatTime(child.lastModified()))
-                }
-                if (matches.size >= limit) {
-                    truncated = true
-                    break
-                }
+        for ((rootIndex, treeUri) in treeUris.withIndex()) {
+            if (limitReached) break
+            val root = runCatching {
+                DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
+            }.getOrNull()
+            if (root == null) {
+                skippedRoots += treeUri.ifBlank { "文件夹 ${rootIndex + 1}" }
+                continue
             }
-            if (truncated) break
-            if (scanned % 100 == 0) yield()
+            val rootName = root.name?.takeIf { it.isNotBlank() } ?: "文件夹 ${rootIndex + 1}"
+            roots += rootName
+
+            var rootScanned = 0
+            val stack = ArrayDeque<DocumentFile>()
+            stack.add(root)
+            while (stack.isNotEmpty()) {
+                val directory = stack.removeLast()
+                val children = runCatching { directory.listFiles() }.getOrNull().orEmpty()
+                for (child in children) {
+                    scanned++
+                    rootScanned++
+                    if (rootScanned > maxVisitedPerRoot) {
+                        truncated = true
+                        break
+                    }
+                    if (child.isDirectory) {
+                        stack.add(child)
+                        continue
+                    }
+                    val name = child.name ?: continue
+                    if (keyword.isNotEmpty() && !name.contains(keyword, ignoreCase = true)) continue
+                    if (exts.isNotEmpty() && exts.none { name.lowercase().endsWith(".$it") }) continue
+                    matches += buildJsonObject {
+                        put("root", rootName)
+                        put("name", name)
+                        put("path", child.uri.toString())
+                        put("size_mb", mb(child.length()))
+                        put("modified", formatTime(child.lastModified()))
+                    }
+                    if (matches.size >= limit) {
+                        truncated = true
+                        limitReached = true
+                        break
+                    }
+                }
+                if (limitReached || rootScanned > maxVisitedPerRoot) break
+                if (scanned % 100 == 0) yield()
+            }
         }
 
         buildJsonObject {
+            put("roots", JsonArray(roots.map { JsonPrimitive(it) }))
             put("query", keyword)
             put("extensions", JsonArray(exts.map { JsonPrimitive(it) }))
             put("scanned", scanned)
             put("matches", JsonArray(matches))
             put("truncated", truncated)
+            put("skipped_roots", JsonArray(skippedRoots.map { JsonPrimitive(it) }))
             put("read_only", true)
         }
     }
@@ -302,6 +317,7 @@ class DeviceTools(private val context: Context) {
             MediaStore.Images.Media.DISPLAY_NAME,
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
             MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.DATE_TAKEN,
             MediaStore.Images.Media.SIZE,
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
@@ -335,16 +351,27 @@ class DeviceTools(private val context: Context) {
                 val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
                 val albumIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
                 val dateIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                val takenIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
                 val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
                 val widthIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
                 val heightIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
                 val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
                 while (cursor.moveToNext() && photos.size < limit) {
+                    val addedAt = cursor.getLong(dateIndex) * 1000
+                    // DATE_TAKEN 本身是毫秒；少数 ROM 会给秒，做一次归一化
+                    val takenAt = cursor.getLong(takenIndex).let {
+                        when {
+                            it >= 1_000_000_000_000L -> it
+                            it > 0 -> it * 1000
+                            else -> addedAt
+                        }
+                    }
                     photos += PhotoFile(
                         uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex)).toString(),
                         name = cursor.getString(nameIndex).orEmpty(),
                         album = cursor.getString(albumIndex).orEmpty(),
-                        addedAt = cursor.getLong(dateIndex) * 1000,
+                        addedAt = addedAt,
+                        capturedAt = takenAt,
                         sizeBytes = cursor.getLong(sizeIndex),
                         width = cursor.getInt(widthIndex),
                         height = cursor.getInt(heightIndex),
@@ -383,7 +410,9 @@ class DeviceTools(private val context: Context) {
                 }
             }
             throw IllegalStateException(
-                "打不开这张图片：$uriString（先用 find_photos 重新拿 uri，或把文件名传给 name）",
+                "打不开这张图片：$uriString" +
+                    (lastError?.message?.let { "（$it）" } ?: "") +
+                    "；先用 find_photos 重新拿 uri，或把文件名传给 name",
                 lastError,
             )
         }
@@ -434,18 +463,20 @@ class DeviceTools(private val context: Context) {
 
     private fun encodePhoto(uri: Uri, maxSide: Int): String {
         val resolver = context.contentResolver
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        // 先整段读进内存再解码：MediaStore 的流对部分相册（如微信目录）带偏移，
+        // BitmapFactory.decodeStream 在这种流上可能直接解不出来。
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("打不开这张图片：$uri")
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
             throw IllegalStateException("无法识别图片尺寸，可能不是图片：$uri")
         }
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSide)
         }
-        val decoded = resolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, options)
-        } ?: throw IllegalStateException("解码图片失败：$uri")
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            ?: throw IllegalStateException("解码图片失败：$uri")
         val scaled = scaleDown(decoded, maxSide)
         return try {
             ByteArrayOutputStream().use { out ->

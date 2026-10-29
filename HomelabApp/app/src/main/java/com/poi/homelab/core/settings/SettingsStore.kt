@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -43,12 +44,18 @@ data class AppSettings(
     val cloudrevePassword: String = "",
     val cloudreveDir: String = "手机照片",
     val photoAutoSync: Boolean = false,
+    /** 每天几点开始同步（0..23），默认凌晨 3 点。 */
+    val photoSyncHour: Int = 3,
+    /** 每次同步向前找几天的照片（1..30）。 */
+    val photoSyncDays: Int = 3,
+    /** 单次最多上传张数（1..500）。 */
+    val photoSyncLimit: Int = 200,
     val token: String = "",
     val deviceName: String = Build.MODEL.orEmpty(),
     val themeMode: String = "system",
     val aiProviders: List<AiProvider> = defaultAiProviders(),
     val aiSelectedId: String = "deepseek",
-    val fileTreeUri: String = "",
+    val fileTreeUris: List<String> = emptyList(),
     val showLedgerOnHome: Boolean = true,
     val showWallpaper: Boolean = true,
     val wallpaperOpacity: Float = 0.22f,
@@ -71,11 +78,16 @@ class SettingsStore(private val context: Context) {
         val CLOUDREVE_PASSWORD = stringPreferencesKey("cloudreve_password")
         val CLOUDREVE_DIR = stringPreferencesKey("cloudreve_dir")
         val PHOTO_AUTO_SYNC = booleanPreferencesKey("photo_auto_sync")
+        val PHOTO_SYNC_HOUR = intPreferencesKey("photo_sync_hour")
+        val PHOTO_SYNC_DAYS = intPreferencesKey("photo_sync_days")
+        val PHOTO_SYNC_LIMIT = intPreferencesKey("photo_sync_limit")
         val TOKEN = stringPreferencesKey("api_token")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val AI_PROVIDERS = stringPreferencesKey("ai_providers")
         val AI_SELECTED = stringPreferencesKey("ai_selected")
+        val FILE_TREE_URIS = stringPreferencesKey("file_tree_uris")
+        // 旧版本只支持一个目录，保留读取用于迁移
         val FILE_TREE_URI = stringPreferencesKey("file_tree_uri")
         val SHOW_LEDGER = booleanPreferencesKey("show_ledger_home")
         val SHOW_WALLPAPER = booleanPreferencesKey("show_wallpaper")
@@ -108,6 +120,9 @@ class SettingsStore(private val context: Context) {
                 cloudrevePassword = prefs[Keys.CLOUDREVE_PASSWORD].orEmpty(),
                 cloudreveDir = prefs[Keys.CLOUDREVE_DIR]?.takeIf { it.isNotBlank() } ?: "手机照片",
                 photoAutoSync = prefs[Keys.PHOTO_AUTO_SYNC] ?: false,
+                photoSyncHour = (prefs[Keys.PHOTO_SYNC_HOUR] ?: 3).coerceIn(0, 23),
+                photoSyncDays = (prefs[Keys.PHOTO_SYNC_DAYS] ?: 3).coerceIn(1, 30),
+                photoSyncLimit = (prefs[Keys.PHOTO_SYNC_LIMIT] ?: 200).coerceIn(1, 500),
                 token = prefs[Keys.TOKEN].orEmpty(),
                 deviceName = prefs[Keys.DEVICE_NAME] ?: Build.MODEL.orEmpty(),
                 themeMode = prefs[Keys.THEME_MODE] ?: "system",
@@ -115,7 +130,15 @@ class SettingsStore(private val context: Context) {
                 aiSelectedId = prefs[Keys.AI_SELECTED]
                     ?.takeIf { id -> providers.any { it.id == id } }
                     ?: providers.first().id,
-                fileTreeUri = prefs[Keys.FILE_TREE_URI].orEmpty(),
+                fileTreeUris = prefs[Keys.FILE_TREE_URIS]
+                    ?.let { raw ->
+                        runCatching { settingsJson.decodeFromString<List<String>>(raw) }.getOrNull()
+                    }
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: prefs[Keys.FILE_TREE_URI]
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { listOf(it) }
+                        ?: emptyList(),
                 showLedgerOnHome = prefs[Keys.SHOW_LEDGER] ?: true,
                 showWallpaper = prefs[Keys.SHOW_WALLPAPER] ?: true,
                 wallpaperOpacity = (prefs[Keys.WALLPAPER_OPACITY] ?: 0.22f).coerceIn(0.05f, 0.9f),
@@ -137,12 +160,16 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.CLOUDREVE_PASSWORD] = value.cloudrevePassword
             prefs[Keys.CLOUDREVE_DIR] = value.cloudreveDir.trim()
             prefs[Keys.PHOTO_AUTO_SYNC] = value.photoAutoSync
+            prefs[Keys.PHOTO_SYNC_HOUR] = value.photoSyncHour.coerceIn(0, 23)
+            prefs[Keys.PHOTO_SYNC_DAYS] = value.photoSyncDays.coerceIn(1, 30)
+            prefs[Keys.PHOTO_SYNC_LIMIT] = value.photoSyncLimit.coerceIn(1, 500)
             prefs[Keys.TOKEN] = value.token.trim()
             prefs[Keys.DEVICE_NAME] = value.deviceName.trim()
             prefs[Keys.THEME_MODE] = value.themeMode
             prefs[Keys.AI_PROVIDERS] = settingsJson.encodeToString(value.aiProviders)
             prefs[Keys.AI_SELECTED] = value.aiSelectedId
-            prefs[Keys.FILE_TREE_URI] = value.fileTreeUri
+            prefs[Keys.FILE_TREE_URIS] = settingsJson.encodeToString(value.fileTreeUris)
+            prefs[Keys.FILE_TREE_URI] = value.fileTreeUris.firstOrNull().orEmpty()
             prefs[Keys.SHOW_LEDGER] = value.showLedgerOnHome
             prefs[Keys.SHOW_WALLPAPER] = value.showWallpaper
             prefs[Keys.WALLPAPER_OPACITY] = value.wallpaperOpacity

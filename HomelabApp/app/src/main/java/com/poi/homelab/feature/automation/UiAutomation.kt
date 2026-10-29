@@ -39,7 +39,10 @@ class UiAutomationService : AccessibilityService() {
         AutomationRestore.markConnected(this)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        SplashSkip.onEvent(this, event)
+    }
 
     override fun onInterrupt() = Unit
 

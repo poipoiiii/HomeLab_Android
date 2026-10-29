@@ -4,22 +4,35 @@ import com.poi.homelab.feature.ai.PhotoFile
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 
 private val responseBlock = Regex(
     "<[^>]*:?response[^>]*>(.*?)</[^>]*:?response>",
     setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
 )
+private val monthFormat = DateTimeFormatter.ofPattern("yyyy-MM")
 private val hrefTag = Regex("<[^>]*:?href[^>]*>([^<]*)</[^>]*:?href>", RegexOption.IGNORE_CASE)
 private val collectionTag = Regex("<[^>]*:?collection\\b", RegexOption.IGNORE_CASE)
 
@@ -31,6 +44,11 @@ private val collectionTag = Regex("<[^>]*:?collection\\b", RegexOption.IGNORE_CA
  * 密码是在 Cloudreve「WebDAV」页面创建 WebDAV 账户时生成的密码，不是登录密码。
  */
 class CloudreveRepository(http: OkHttpClient) {
+
+    private companion object {
+        /** 并发上传数：家用上行带宽有限，3 路足够摊掉往返延迟，又不至于压垮服务端。 */
+        const val MAX_PARALLEL = 3
+    }
 
     private val client = http.newBuilder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -92,40 +110,86 @@ class CloudreveRepository(http: OkHttpClient) {
         parseFolders(xml, target)
     }
 
-    /** 逐张上传，目录只创建一次；同名文件跳过，不删除任何云端文件。 */
+    /**
+     * 逐张上传，按拍摄日期分目录：根目录/设备名/年-月/年-月-日/，同一天的图落在同一层。
+     * 同目录下同名文件跳过，不删除任何云端文件；最多 [MAX_PARALLEL] 张并发上传。
+     */
     suspend fun uploadAll(
         baseUrl: String,
         user: String,
         password: String,
         remoteDir: String,
         photos: List<PhotoFile>,
+        deviceName: String = "",
         readBytes: suspend (PhotoFile) -> ByteArray,
-        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        onProgress: (done: Int, total: Int, written: Long, totalBytes: Long) -> Unit =
+            { _, _, _, _ -> },
     ): BatchUploadResult = withContext(Dispatchers.IO) {
         if (photos.isEmpty()) return@withContext BatchUploadResult(0, emptyList(), emptyList(), emptyList())
         val auth = credentials(user, password)
-        val folder = ensureFolders(webdavRoot(baseUrl), auth, remoteDir)
+        val root = webdavRoot(baseUrl)
+        // 目录先串行建好，避免并发 MKCOL 撞车
+        val folders = photos
+            .map { datedDir(remoteDir, deviceName, it) }
+            .distinct()
+            .associateWith { ensureFolders(root, auth, it) }
+        val totalBytes = photos.sumOf { it.sizeBytes }
+        val written = AtomicLong(0)
+        val done = AtomicInteger(0)
+        val lock = Any()
         val uploaded = mutableListOf<String>()
         val skipped = mutableListOf<String>()
         val failed = mutableListOf<UploadFailure>()
-        photos.forEachIndexed { index, photo ->
-            try {
-                val bytes = readBytes(photo)
-                when (val result = uploadFile(folder, auth, photo.name, photo.mime, bytes)) {
-                    "uploaded" -> uploaded += photo.name
-                    else -> skipped += photo.name
+        val gate = Semaphore(MAX_PARALLEL)
+        coroutineScope {
+            photos.forEach { photo ->
+                launch(Dispatchers.IO) {
+                    gate.withPermit {
+                        val folder = folders.getValue(datedDir(remoteDir, deviceName, photo))
+                        var localWritten = 0L
+                        try {
+                            val bytes = readBytes(photo)
+                            val result = uploadFile(folder, auth, photo.name, photo.mime, bytes) { count ->
+                                localWritten += count
+                                val now = written.addAndGet(count.toLong())
+                                onProgress(done.get(), photos.size, now, totalBytes)
+                            }
+                            synchronized(lock) {
+                                if (result == "uploaded") uploaded += photo.name else skipped += photo.name
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            synchronized(lock) {
+                                failed += UploadFailure(
+                                    photo.name,
+                                    failure.message ?: failure.javaClass.simpleName,
+                                )
+                            }
+                        } finally {
+                            // 跳过/失败的照片也要补上剩余字节，进度条才会走到头
+                            val gap = (photo.sizeBytes - localWritten).coerceAtLeast(0)
+                            if (gap > 0) written.addAndGet(gap)
+                            onProgress(done.incrementAndGet(), photos.size, written.get(), totalBytes)
+                        }
+                    }
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                failed += UploadFailure(
-                    photo.name,
-                    failure.message ?: failure.javaClass.simpleName,
-                )
             }
-            onProgress(index + 1, photos.size)
         }
         BatchUploadResult(photos.size, uploaded, skipped, failed)
+    }
+
+    /** 设备名/年-月/年-月-日，空段自动跳过；设备名用于隔离多台手机的路径和同名文件。 */
+    private fun datedDir(root: String, deviceName: String, photo: PhotoFile): String {
+        val date = Instant.ofEpochMilli(photo.capturedAt).atZone(ZoneId.systemDefault()).toLocalDate()
+        return listOf(
+            root.trim().trim('/', '\\'),
+            deviceName.trim().replace('/', '_').replace('\\', '_'),
+            monthFormat.format(date),
+            date.toString(),
+        )
+            .filter { it.isNotBlank() }
+            .joinToString("/")
     }
 
     private fun uploadFile(
@@ -134,6 +198,7 @@ class CloudreveRepository(http: OkHttpClient) {
         name: String,
         mime: String,
         bytes: ByteArray,
+        onChunk: (Int) -> Unit = {},
     ): String {
         val fileName = safeFileName(name)
         val target = folder.newBuilder().addPathSegment(fileName).build()
@@ -151,7 +216,13 @@ class CloudreveRepository(http: OkHttpClient) {
 
         val put = Request.Builder()
             .url(target)
-            .put(bytes.toRequestBody(mime.ifBlank { "application/octet-stream" }.toMediaTypeOrNull()))
+            .put(
+                ProgressRequestBody(
+                    bytes = bytes,
+                    mime = mime.ifBlank { "application/octet-stream" }.toMediaTypeOrNull(),
+                    onChunk = onChunk,
+                ),
+            )
             .header("Authorization", auth)
             .build()
         client.newCall(put).execute().use { response ->
@@ -249,4 +320,26 @@ class CloudreveRepository(http: OkHttpClient) {
             .replace('/', '_')
             .replace('\\', '_')
             .ifBlank { "photo_${System.currentTimeMillis()}.jpg" }
+}
+
+/** PUT 时按 64 KB 回报写入量，用来算上传进度和实时速度。 */
+private class ProgressRequestBody(
+    private val bytes: ByteArray,
+    private val mime: MediaType?,
+    private val onChunk: (Int) -> Unit,
+) : RequestBody() {
+
+    override fun contentType(): MediaType? = mime
+
+    override fun contentLength(): Long = bytes.size.toLong()
+
+    override fun writeTo(sink: BufferedSink) {
+        var offset = 0
+        while (offset < bytes.size) {
+            val count = minOf(64 * 1024, bytes.size - offset)
+            sink.write(bytes, offset, count)
+            offset += count
+            onChunk(count)
+        }
+    }
 }

@@ -337,6 +337,11 @@ fun AiScreen(
             }
         }
 
+        val uploading = state.pendingUpload
+        if (uploading != null && uploading.busy) {
+            UploadProgressRow(pending = uploading, onCancel = onCancelUpload)
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.Bottom,
@@ -455,7 +460,8 @@ fun AiScreen(
         )
     }
 
-    state.pendingUpload?.let { pending ->
+    // 上传开始后收起选目录弹窗，改用输入框上方的进度条，避免弹窗挡住整个页面
+    state.pendingUpload?.takeIf { !it.busy }?.let { pending ->
         UploadFolderSheet(
             pending = pending,
             onConfirm = onChooseUploadDir,
@@ -761,6 +767,36 @@ private fun PhotoViewer(uri: String, onClose: () -> Unit) {
     }
 }
 
+/** 上传中：输入框上方的常驻进度条，不挡页面，也能随时取消。 */
+@Composable
+private fun UploadProgressRow(pending: PendingUpload, onCancel: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(14.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = pending.status ?: "正在上传…",
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Text(
+                text = "后台继续上传，可以切到其他页面；已传完的文件不会回滚。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = onCancel) {
+            Text("取消上传", color = Danger)
+        }
+    }
+}
+
 /** 上传前选文件夹：列表里的目录直接点，也可以自己填一个新路径。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -773,7 +809,7 @@ private fun UploadFolderSheet(
     var dir by remember(pending.seq) { mutableStateOf(pending.defaultDir) }
 
     ModalBottomSheet(
-        onDismissRequest = { if (!pending.busy) onCancel() },
+        onDismissRequest = onCancel,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.background,
     ) {
@@ -797,11 +833,11 @@ private fun UploadFolderSheet(
                 onValueChange = { dir = it },
                 label = { Text("云盘目录") },
                 singleLine = true,
-                enabled = !pending.busy,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             )
             Text(
-                text = "点下面的文件夹直接选用，也可以手动改成新目录（会自动创建）。",
+                text = "点下面的文件夹直接选用，也可以手动改成新目录（会自动创建）。" +
+                    "照片会按「设备名/年-月/年-月-日」自动分文件夹，同一天放进同一层。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp),
@@ -830,30 +866,10 @@ private fun UploadFolderSheet(
                             FolderRow(
                                 name = folder,
                                 selected = dir.trim().trim('/') == folder.trim().trim('/'),
-                                enabled = !pending.busy,
                                 onClick = { dir = folder },
                             )
                         }
                     }
-                }
-            }
-
-            if (pending.busy) {
-                Row(
-                    modifier = Modifier.padding(top = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = pending.status ?: "正在上传…",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
 
@@ -862,20 +878,16 @@ private fun UploadFolderSheet(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextButton(onClick = onCancel, enabled = !pending.busy) {
+                TextButton(onClick = onCancel) {
                     Text("取消")
                 }
                 Spacer(Modifier.width(8.dp))
                 Button(
                     onClick = { onConfirm(dir) },
-                    enabled = !pending.busy && dir.isNotBlank(),
+                    enabled = dir.isNotBlank(),
                 ) {
                     Text(
-                        text = if (pending.busy) {
-                            "上传中…"
-                        } else {
-                            "上传到「${dir.trim().ifBlank { pending.defaultDir }}」"
-                        },
+                        text = "上传到「${dir.trim().ifBlank { pending.defaultDir }}」",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -889,7 +901,6 @@ private fun UploadFolderSheet(
 private fun FolderRow(
     name: String,
     selected: Boolean,
-    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     Row(
@@ -903,7 +914,7 @@ private fun FolderRow(
                     Color.Transparent
                 },
             )
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

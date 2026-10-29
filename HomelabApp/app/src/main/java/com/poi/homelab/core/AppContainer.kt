@@ -8,6 +8,7 @@ import com.poi.homelab.feature.ai.DeviceTools
 import com.poi.homelab.feature.bills.BillRepository
 import com.poi.homelab.feature.calendar.CalendarRepository
 import com.poi.homelab.feature.calendar.CalendarStore
+import com.poi.homelab.feature.files.FileInsightRepository
 import com.poi.homelab.feature.homarr.HomarrRepository
 import com.poi.homelab.feature.home.ChecklistStore
 import com.poi.homelab.feature.home.TodoStore
@@ -39,6 +40,7 @@ class AppContainer(context: android.content.Context) {
     val todo = TodoStore(appContext)
     val calendar = CalendarRepository(CalendarStore(appContext))
     val deviceTools = DeviceTools(appContext)
+    val files = FileInsightRepository(appContext)
     val aiClient = AiClient(http, json)
     val aiAgent = AiAgent()
     private val mcp = McpClient(http, json)

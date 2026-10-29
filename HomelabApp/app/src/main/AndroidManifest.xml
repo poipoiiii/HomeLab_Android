@@ -15,6 +15,15 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:ignore="ScheduleExactAlarm" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
@@ -85,7 +94,26 @@
             </intent-filter>
         </receiver>
 
-        <!-- 照片自动同步：JobScheduler 周期任务，上传可能超过广播接收器时限 -->
+        <!-- 照片自动同步：闹钟唤醒前台服务上传，通知栏显示进度 -->
+        <service
+            android:name=".feature.photos.PhotoSyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".feature.photos.PhotoSyncAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".feature.photos.PhotoSyncBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 前台服务被系统拒绝时的兜底：JobScheduler 静默同步 -->
         <service
             android:name=".feature.photos.PhotoSyncJobService"
             android:exported="true"

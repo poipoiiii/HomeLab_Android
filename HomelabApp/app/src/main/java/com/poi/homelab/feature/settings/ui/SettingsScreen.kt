@@ -2,7 +2,10 @@ package com.poi.homelab.feature.settings.ui
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.Manifest
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,19 +14,24 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -38,11 +46,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.Lifecycle
 import com.poi.homelab.core.settings.AppSettings
 import com.poi.homelab.core.ui.components.CreamCard
+import com.poi.homelab.core.ui.components.InlineAction
 import com.poi.homelab.core.ui.components.Pill
 import com.poi.homelab.core.ui.components.SecondaryButton
 import com.poi.homelab.core.ui.components.SectionHeader
@@ -54,6 +64,7 @@ import com.poi.homelab.core.util.hasPhotoAccess
 import com.poi.homelab.core.util.hasUsageAccess
 import com.poi.homelab.core.util.photoPermission
 import com.poi.homelab.feature.automation.AutomationRestore
+import com.poi.homelab.feature.automation.SplashSkip
 import com.poi.homelab.feature.automation.UiAutomation
 import com.poi.homelab.feature.homarr.HomarrBoard
 import com.poi.homelab.feature.notify.ui.CaptureSettingsCard
@@ -81,6 +92,7 @@ fun SettingsScreen(
     onWallpaperOpacity: (Float) -> Unit,
     onWallpaperDim: (Float) -> Unit,
     onSettingsDetailed: (Boolean) -> Unit,
+    onOpenFiles: () -> Unit = {},
     isPreview: Boolean = false,
 ) {
     val settings = state.settings
@@ -103,6 +115,7 @@ fun SettingsScreen(
     var photoSyncStatus by remember {
         mutableStateOf(if (isPreview) "还没有同步记录" else PhotoSyncStatus.describe(context))
     }
+    var syncDialogOpen by rememberSaveable { mutableStateOf(false) }
     var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
     var deviceName by rememberSaveable(settings.deviceName) { mutableStateOf(settings.deviceName) }
     var wallpaperOpacity by remember(settings.wallpaperOpacity) {
@@ -127,13 +140,23 @@ fun SettingsScreen(
     var autoRestoreReady by remember {
         mutableStateOf(if (isPreview) false else AutomationRestore.canAutoRestore(context))
     }
+    var splashSkip by remember {
+        mutableStateOf(if (isPreview) false else SplashSkip.isEnabled(context))
+    }
+    var splashExtra by remember {
+        mutableStateOf(if (isPreview) emptySet<String>() else SplashSkip.extraPackages(context))
+    }
+    var splashAppsOpen by rememberSaveable { mutableStateOf(false) }
     if (!isPreview) {
         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
             usageGranted = hasUsageAccess(context)
             photoGranted = hasPhotoAccess(context)
             automationGranted = UiAutomation.isEnabled(context)
             autoRestoreReady = AutomationRestore.canAutoRestore(context)
+            splashExtra = SplashSkip.extraPackages(context)
             photoSyncStatus = PhotoSyncStatus.describe(context)
+            // 用户可能刚在系统里开了精确闹钟，回到前台时重排一次，让下一次走精确时间
+            PhotoAutoSync.apply(context, settings.photoAutoSync, settings.photoSyncHour)
         }
     }
 
@@ -145,14 +168,18 @@ fun SettingsScreen(
         }
     }
 
-    var treeName by remember(settings.fileTreeUri) { mutableStateOf<String?>(null) }
-    LaunchedEffect(settings.fileTreeUri) {
-        treeName = if (settings.fileTreeUri.isBlank()) {
-            null
-        } else {
+    val notifyLauncher = if (isPreview) {
+        null
+    } else {
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    }
+
+    var treeNames by remember(settings.fileTreeUris) { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(settings.fileTreeUris) {
+        treeNames = settings.fileTreeUris.mapIndexed { index, uri ->
             runCatching {
-                DocumentFile.fromTreeUri(context, Uri.parse(settings.fileTreeUri))?.name
-            }.getOrNull()
+                DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: "文件夹 ${index + 1}"
         }
     }
 
@@ -441,31 +468,22 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("每天自动同步", style = MaterialTheme.typography.titleMedium)
+                        Text("照片自动同步", style = MaterialTheme.typography.titleMedium)
                         SettingHint(
-                            "每天由系统安排一次，把最近 ${PhotoAutoSync.LOOKBACK_DAYS} 天的照片传到上面的目录；" +
-                                "同名文件跳过。需要已授权相册并填好地址和账密。",
+                            if (settings.photoAutoSync) {
+                                "每天 ${settings.photoSyncHour}:00 · 最近 ${settings.photoSyncDays} 天" +
+                                    " · 每次最多 ${settings.photoSyncLimit} 张"
+                            } else {
+                                "未开启。点「设置」可改时间、范围和单次张数。"
+                            },
                             detailed,
                             Modifier.padding(top = 4.dp),
                         )
                     }
-                    Switch(checked = photoAutoSync, onCheckedChange = { photoAutoSync = it })
+                    TextButton(onClick = { syncDialogOpen = true }) {
+                        Text("设置")
+                    }
                 }
-                Text(
-                    text = photoSyncStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                SecondaryButton(
-                    text = "立即同步一次",
-                    onClick = {
-                        PhotoAutoSync.runNow(context)
-                        photoSyncStatus = "已安排后台同步，稍后回到这里看结果"
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    enabled = !isPreview && cloudreveUrl.isNotBlank() && photoGranted,
-                )
 
                 Text(
                     "账本 Token（可选）",
@@ -491,6 +509,11 @@ fun SettingsScreen(
                     "设备名",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 18.dp),
+                )
+                SettingHint(
+                    "会作为云盘照片目录的第一级（设备名/年-月/年-月-日）。多台手机建议改成不同名字，避免同名截图混在一起。",
+                    detailed,
+                    Modifier.padding(top = 4.dp),
                 )
                 OutlinedTextField(
                     value = deviceName,
@@ -584,19 +607,27 @@ fun SettingsScreen(
 
         item {
             CreamCard {
-                Text("可搜索目录", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "扫描范围",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    InlineAction("文件洞察", onOpenFiles)
+                }
                 Text(
-                    text = if (settings.fileTreeUri.isBlank()) {
-                        "未选择目录"
+                    text = if (settings.fileTreeUris.isEmpty()) {
+                        "未选择文件夹"
                     } else {
-                        "已选择：${treeName ?: settings.fileTreeUri}"
+                        "已选择 ${settings.fileTreeUris.size} 个：${treeNames.joinToString("、")}"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
                 )
                 SettingHint(
-                    "AI 只会在你授权的目录内按文件名查找，只读，不会修改或删除文件。",
+                    "同一份授权用于 AI 文件搜索和文件洞察。Android 11+ 不允许选择内部存储根目录，" +
+                        "请逐个添加 DCIM、Download、Documents 等文件夹；Android/data 等系统目录无法读取。只读，不会修改或删除文件。",
                     detailed,
                     Modifier.padding(top = 5.dp, bottom = 12.dp),
                 )
@@ -605,20 +636,22 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     SecondaryButton(
-                        text = "选择目录",
+                        text = "添加文件夹",
                         onClick = { treeLauncher?.launch(null) },
                         modifier = Modifier.weight(1f),
                         enabled = treeLauncher != null,
                     )
-                    if (settings.fileTreeUri.isNotBlank()) {
+                    if (settings.fileTreeUris.isNotEmpty()) {
                         SecondaryButton(
-                            text = "清除",
+                            text = "清除全部",
                             onClick = {
-                                runCatching {
-                                    context.contentResolver.releasePersistableUriPermission(
-                                        Uri.parse(settings.fileTreeUri),
-                                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
-                                    )
+                                settings.fileTreeUris.forEach { uri ->
+                                    runCatching {
+                                        context.contentResolver.releasePersistableUriPermission(
+                                            Uri.parse(uri),
+                                            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                                        )
+                                    }
                                 }
                                 onClearFileTree()
                             },
@@ -653,6 +686,45 @@ fun SettingsScreen(
                     detailed,
                     Modifier.padding(top = 6.dp),
                 )
+                ThinDivider(Modifier.padding(vertical = 12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("开屏广告自动跳过", style = MaterialTheme.typography.titleMedium)
+                        SettingHint(
+                            "只在 QQ 音乐、微博、知乎、淘宝等内置名单里，找顶部的「跳过」小按钮点一下，" +
+                                "点不到就放弃，不连点，也不碰其他应用。",
+                            detailed,
+                            Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    Switch(
+                        checked = splashSkip,
+                        onCheckedChange = {
+                            splashSkip = it
+                            SplashSkip.setEnabled(context, it)
+                        },
+                        enabled = !isPreview,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "开屏跳过应用：${SplashSkip.supportedCount() + splashExtra.size} 个",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    InlineAction(
+                        text = "管理",
+                        onClick = { splashAppsOpen = true },
+                        enabled = !isPreview,
+                    )
+                }
                 Text(
                     text = if (autoRestoreReady) {
                         "重启自动恢复：已就绪"
@@ -767,6 +839,309 @@ fun SettingsScreen(
             }
         }
     }
+
+    if (splashAppsOpen && !isPreview) {
+        SplashAppsDialog(
+            context = context,
+            initialExtra = splashExtra,
+            onExtraChange = { splashExtra = it },
+            onDismiss = { splashAppsOpen = false },
+        )
+    }
+
+    if (syncDialogOpen) {
+        PhotoSyncDialog(
+            settings = settings,
+            status = photoSyncStatus,
+            canSyncNow = !isPreview && cloudreveUrl.isNotBlank() && photoGranted,
+            exactAlarmBlocked = !isPreview && !PhotoAutoSync.canScheduleExact(context),
+            batteryUnrestricted = !isPreview && PhotoAutoSync.isIgnoringBatteryOptimizations(context),
+            onOpenBatterySettings = {
+                runCatching {
+                    context.startActivity(
+                        Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:${context.packageName}"),
+                        ),
+                    )
+                }
+            },
+            onOpenExactAlarm = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:${context.packageName}"),
+                            ),
+                        )
+                    }
+                }
+            },
+            onSyncNow = {
+                PhotoAutoSync.runNow(context)
+                photoSyncStatus = "已开始同步，通知栏会显示进度"
+            },
+            onDismiss = { syncDialogOpen = false },
+            onSave = { enabled, hour, days, limit ->
+                syncDialogOpen = false
+                photoAutoSync = enabled
+                if (enabled && !isPreview && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED
+                ) {
+                    notifyLauncher?.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                onSave(
+                    settings.copy(
+                        labUrl = labUrl.trim(),
+                        billUrl = billUrl.trim(),
+                        homarrUrl = homarrUrl.trim(),
+                        homarrApiKey = homarrApiKey.trim(),
+                        homarrBoard = homarrBoard.trim(),
+                        cloudreveUrl = cloudreveUrl.trim(),
+                        cloudreveUser = cloudreveUser.trim(),
+                        cloudrevePassword = cloudrevePassword,
+                        cloudreveDir = cloudreveDir.trim(),
+                        photoAutoSync = enabled,
+                        photoSyncHour = hour,
+                        photoSyncDays = days,
+                        photoSyncLimit = limit,
+                        token = token.trim(),
+                        deviceName = deviceName.trim(),
+                    ),
+                )
+            },
+        )
+    }
+}
+
+/**
+ * 开屏跳过的应用名单：内置的锁成常开，其他应用按需打开。
+ * 只对能在桌面上点开的 App 生效，避免把系统组件加进来。
+ */
+@Composable
+private fun SplashAppsDialog(
+    context: Context,
+    initialExtra: Set<String>,
+    onExtraChange: (Set<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var extra by remember { mutableStateOf(initialExtra) }
+    val apps = remember { launchableApps(context) }
+    val builtin = remember { SplashSkip.builtinPackages() }
+    val filtered = remember(query, apps) {
+        val keyword = query.trim()
+        if (keyword.isEmpty()) apps else apps.filter {
+            it.first.contains(keyword, true) || it.second.contains(keyword, true)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("开屏跳过应用") },
+        text = {
+            Column(Modifier.heightIn(max = 460.dp)) {
+                Text(
+                    text = "内置 ${builtin.size} 个常见应用，常开；下面可以再加你常用的 App。" +
+                        "只会点带「跳过」字样的小按钮，找不到就放弃。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    label = { Text("搜索应用") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                LazyColumn(Modifier.padding(top = 6.dp)) {
+                    items(filtered) { app ->
+                        val pkg = app.second
+                        val locked = pkg in builtin
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(app.first, style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    text = if (locked) "$pkg · 内置" else pkg,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = locked || pkg in extra,
+                                onCheckedChange = { on ->
+                                    extra = if (on) extra + pkg else extra - pkg
+                                    if (locked) {
+                                        // 内置项不允许关，开关只做展示
+                                    } else if (on) {
+                                        SplashSkip.addPackage(context, pkg)
+                                    } else {
+                                        SplashSkip.removePackage(context, pkg)
+                                    }
+                                    onExtraChange(extra)
+                                },
+                                enabled = !locked,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
+    )
+}
+
+/** 能出现在桌面上的应用，按名字排序。 */
+private fun launchableApps(context: Context): List<Pair<String, String>> {
+    val pm = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    return pm.queryIntentActivities(intent, 0)
+        .mapNotNull { info ->
+            val pkg = info.activityInfo?.packageName ?: return@mapNotNull null
+            val label = info.loadLabel(pm).toString().ifBlank { pkg }
+            label to pkg
+        }
+        .distinctBy { it.second }
+        .sortedBy { it.first.lowercase() }
+}
+
+@Composable
+private fun PhotoSyncDialog(
+    settings: AppSettings,
+    status: String,
+    canSyncNow: Boolean,
+    exactAlarmBlocked: Boolean,
+    batteryUnrestricted: Boolean,
+    onOpenExactAlarm: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onSyncNow: () -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (enabled: Boolean, hour: Int, days: Int, limit: Int) -> Unit,
+) {
+    var enabled by remember(settings.photoAutoSync) { mutableStateOf(settings.photoAutoSync) }
+    var hour by remember(settings.photoSyncHour) { mutableStateOf(settings.photoSyncHour.toString()) }
+    var days by remember(settings.photoSyncDays) { mutableStateOf(settings.photoSyncDays.toString()) }
+    var limit by remember(settings.photoSyncLimit) { mutableStateOf(settings.photoSyncLimit.toString()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("照片自动同步") },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("每天自动上传", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "到点由前台服务上传，通知栏显示进度，可随时取消。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+                OutlinedTextField(
+                    value = hour,
+                    onValueChange = { value ->
+                        if (value.length <= 2 && value.all { it.isDigit() }) hour = value
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    label = { Text("每天几点开始（0-23）") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = days,
+                    onValueChange = { value ->
+                        if (value.length <= 2 && value.all { it.isDigit() }) days = value
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    label = { Text("同步最近几天（1-30）") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                OutlinedTextField(
+                    value = limit,
+                    onValueChange = { value ->
+                        if (value.length <= 3 && value.all { it.isDigit() }) limit = value
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    label = { Text("单次最多几张（1-500）") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                Text(
+                    text = "上次同步：$status",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+                if (enabled && exactAlarmBlocked) {
+                    Text(
+                        text = "系统还没允许「精确闹钟」，凌晨可能延迟几十分钟。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Danger,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    TextButton(onClick = onOpenExactAlarm) {
+                        Text("去允许精确闹钟")
+                    }
+                }
+                if (enabled && !batteryUnrestricted) {
+                    Text(
+                        text = "系统还在限制本应用后台，长时间息屏可能被冻结，导致同步不跑。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Danger,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    TextButton(onClick = onOpenBatterySettings) {
+                        Text("允许后台不限电")
+                    }
+                }
+                SecondaryButton(
+                    text = "立即同步一次",
+                    onClick = onSyncNow,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    enabled = canSyncNow,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(
+                        enabled,
+                        hour.toIntOrNull()?.coerceIn(0, 23) ?: settings.photoSyncHour,
+                        days.toIntOrNull()?.coerceIn(1, 30) ?: settings.photoSyncDays,
+                        limit.toIntOrNull()?.coerceIn(1, 500) ?: settings.photoSyncLimit,
+                    )
+                },
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
 }
 
 @Composable

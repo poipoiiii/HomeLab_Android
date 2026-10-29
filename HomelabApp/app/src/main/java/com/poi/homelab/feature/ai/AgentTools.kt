@@ -12,6 +12,7 @@ import com.google.adk.kt.types.HttpOptions
 import com.google.adk.kt.types.Part
 import com.google.adk.kt.types.Role
 import com.poi.homelab.core.settings.AppSettings
+import com.poi.homelab.core.util.fileSize
 import com.poi.homelab.core.util.hasPhotoAccess
 import com.poi.homelab.core.util.photoPermission
 import com.poi.homelab.feature.automation.UiAutomation
@@ -22,6 +23,9 @@ import com.poi.homelab.feature.calendar.CALENDAR_TRAVEL
 import com.poi.homelab.feature.calendar.CalendarEntry
 import com.poi.homelab.feature.calendar.CalendarEntryInput
 import com.poi.homelab.feature.calendar.CalendarRepository
+import com.poi.homelab.feature.files.FileCategory
+import com.poi.homelab.feature.files.FileInsightRepository
+import com.poi.homelab.feature.files.FileInsights
 import com.poi.homelab.feature.lab.LabRepository
 import java.time.format.DateTimeFormatter
 import java.time.Instant
@@ -53,7 +57,6 @@ import kotlinx.serialization.json.longOrNull
 data class PhotoUploadRequest(
     val sinceDays: Int,
     val query: String,
-    val limit: Int,
     val offset: Int,
     val count: Int,
     val defaultDir: String,
@@ -72,6 +75,7 @@ class AgentTools(
     private val lab: LabRepository,
     private val bill: BillRepository,
     private val calendar: CalendarRepository,
+    private val files: FileInsightRepository,
     private val settings: AppSettings,
     private val provider: AiProvider,
     private val ai: AiClient,
@@ -122,8 +126,8 @@ class AgentTools(
 
     @Tool(
         name = "find_files",
-        description = "在用户通过设置授权的目录内按文件名/扩展名查找文件，只读，不会修改或删除。" +
-            "需要用户先在设置里选择可搜索目录。",
+        description = "在用户通过设置授权的文件夹内按文件名/扩展名查找文件，只读，不会修改或删除。" +
+            "需要用户先在设置里选择可搜索文件夹。",
     )
     suspend fun findFiles(
         @Param("文件名关键词") query: String,
@@ -135,11 +139,94 @@ class AgentTools(
             .map { it.trim() }
             .filter { it.isNotBlank() }
         device.findFiles(
-            treeUri = settings.fileTreeUri,
+            treeUris = settings.fileTreeUris,
             query = query,
             extensions = exts,
             limit = (limit ?: 20).coerceIn(1, 50),
         ).toPlainMap()
+    }
+
+    @Tool(
+        name = "file_insight_summary",
+        description = "读取上次文件扫描的统计摘要：总量、类型构成、占空间目录、最大文件、重复文件、缓存和旧文件。" +
+            "用户问手机空间、大文件、重复文件、缓存时使用。只读；没有索引时提示用户先去 首页快捷面板 → 文件洞察 扫描一次。",
+    )
+    suspend fun fileInsightSummary(): Map<String, Any?> = safely {
+        val insight = files.insight()
+            ?: return@safely mapOf(
+                "error" to "还没有文件索引",
+                "hint" to "让用户打开 首页快捷面板 → 文件洞察，选择扫描范围并扫描一次。",
+            )
+        FileInsights.summaryMap(insight)
+    }
+
+    @Tool(
+        name = "search_indexed_files",
+        description = "在文件洞察的索引里按文件名/路径、扩展名、类型和最小体积搜索。只读，不会触发磁盘扫描；" +
+            "需要用户先在 首页快捷面板 → 文件洞察 扫描一次。",
+    )
+    suspend fun searchIndexedFiles(
+        @Param("文件名或路径关键词，留空表示不过滤") query: String? = null,
+        @Param("扩展名，如 pdf,mp4") ext: String? = null,
+        @Param("类型：图片/视频/音频/文档/压缩包/安装包/其他") category: String? = null,
+        @Param("最小体积 MB，默认 0") minSizeMb: Int? = null,
+        @Param("排序：size 按大小 / time 按修改时间 / name 按名称") sort: String? = null,
+        @Param("返回条数，默认 20，最大 50") limit: Int? = null,
+    ): Map<String, Any?> = safely {
+        val index = files.load()
+            ?: return@safely mapOf(
+                "error" to "还没有文件索引",
+                "hint" to "让用户打开 首页快捷面板 → 文件洞察，选择扫描范围并扫描一次。",
+            )
+        val keyword = query.orEmpty().trim()
+        val extensions = ext.orEmpty()
+            .split(',')
+            .map { it.trim().removePrefix(".").lowercase() }
+            .filter { it.isNotBlank() }
+            .toSet()
+        val categoryText = category.orEmpty().trim()
+        val wantedCategory = FileCategory.entries.firstOrNull {
+            it.label == categoryText || it.name.equals(categoryText, ignoreCase = true)
+        }
+        val minBytes = (minSizeMb ?: 0).coerceAtLeast(0).toLong() * 1024L * 1024L
+
+        val matched = index.entries.asSequence()
+            .filter {
+                keyword.isEmpty() ||
+                    it.name.contains(keyword, ignoreCase = true) ||
+                    it.path.contains(keyword, ignoreCase = true)
+            }
+            .filter { extensions.isEmpty() || it.extension in extensions }
+            .filter { wantedCategory == null || it.category == wantedCategory }
+            .filter { it.size >= minBytes }
+            .toList()
+        val sorted = when (sort?.trim()?.lowercase()) {
+            "time" -> matched.sortedByDescending { it.modified }
+            "name" -> matched.sortedBy { it.name.lowercase() }
+            else -> matched.sortedByDescending { it.size }
+        }
+        val max = (limit ?: 20).coerceIn(1, 50)
+
+        mapOf(
+            "root" to index.rootName,
+            "scanned_at" to photoTime.format(Instant.ofEpochMilli(index.scannedAt)),
+            "truncated" to index.truncated,
+            "total_matches" to sorted.size,
+            "returned" to minOf(sorted.size, max),
+            "files" to sorted.take(max).map {
+                mapOf(
+                    "name" to it.name,
+                    "path" to it.path,
+                    "size" to fileSize(it.size),
+                    "modified" to if (it.modified > 0) {
+                        photoTime.format(Instant.ofEpochMilli(it.modified))
+                    } else {
+                        ""
+                    },
+                    "mime" to it.mime,
+                )
+            },
+        )
     }
 
     @Tool(
@@ -197,7 +284,7 @@ class AgentTools(
     suspend fun uploadRecentPhotos(
         @Param("最近 N 天，默认 3，0 表示不限") sinceDays: Int? = null,
         @Param("可选，建议的云盘目录；用户没指定就留空") remoteDir: String? = null,
-        @Param("最多上传张数，默认 100，最大 200") limit: Int? = null,
+        @Param("最多上传张数，默认 100，最大 200；用户说只传 N 张时必须传 N") limit: Int? = null,
         @Param("分页偏移，默认 0") offset: Int? = null,
         @Param("可选，文件名或相册名关键词，如 截图、微信") query: String? = null,
     ): Map<String, Any?> = safely {
@@ -238,7 +325,6 @@ class AgentTools(
             PhotoUploadRequest(
                 sinceDays = days,
                 query = query.orEmpty().trim(),
-                limit = max,
                 offset = start,
                 count = photos.size,
                 defaultDir = dir,

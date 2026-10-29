@@ -10,6 +10,7 @@ import com.poi.homelab.core.AppContainer
 import com.poi.homelab.core.settings.AppSettings
 import com.poi.homelab.core.settings.DEFAULT_LAB_URL
 import com.poi.homelab.core.ui.theme.Success
+import com.poi.homelab.core.util.fileSize
 import com.poi.homelab.feature.ai.AgentTools
 import com.poi.homelab.feature.ai.AiAgent
 import com.poi.homelab.feature.ai.AiClient
@@ -29,6 +30,13 @@ import com.poi.homelab.feature.bills.BillSums
 import com.poi.homelab.feature.bills.BillTransaction
 import com.poi.homelab.feature.bills.TransactionPage
 import com.poi.homelab.feature.calendar.CalendarEntry
+import com.poi.homelab.feature.files.FileCategory
+import com.poi.homelab.feature.files.FileEntry
+import com.poi.homelab.feature.files.FileFilter
+import com.poi.homelab.feature.files.FileIndexSnapshot
+import com.poi.homelab.feature.files.FileInsight
+import com.poi.homelab.feature.files.FileSort
+import com.poi.homelab.feature.files.FileView
 import com.poi.homelab.feature.homarr.HomarrApp
 import com.poi.homelab.feature.homarr.HomarrBoard
 import com.poi.homelab.feature.homarr.WeatherQuery
@@ -44,6 +52,8 @@ import java.text.SimpleDateFormat
 import java.time.YearMonth
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import okhttp3.Request
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.async
@@ -77,7 +87,6 @@ data class PendingUpload(
     val seq: Long,
     val sinceDays: Int,
     val query: String,
-    val limit: Int,
     val offset: Int,
     val count: Int,
     val defaultDir: String,
@@ -96,6 +105,31 @@ data class BillImportBatch(
     val stats: BillImportStats? = null,
     val imageUri: String? = null,
 )
+
+/** 文件洞察页面状态；完整索引留在仓库里，state 只放当前筛选结果。 */
+data class FileUiState(
+    val index: FileIndexSnapshot? = null,
+    val insight: FileInsight? = null,
+    val indexLoaded: Boolean = false,
+    val scanning: Boolean = false,
+    val scannedFiles: Int = 0,
+    val currentDir: String = "",
+    val scanError: String? = null,
+    val view: FileView = FileView.All,
+    val query: String = "",
+    val category: FileCategory? = null,
+    val sort: FileSort = FileSort.SizeDesc,
+    val rows: List<FileEntry> = emptyList(),
+    val totalMatches: Int = 0,
+    val shown: Int = 0,
+    val loading: Boolean = false,
+    val analysis: String? = null,
+    val analysisOpen: Boolean = false,
+    val analysisLoading: Boolean = false,
+    val analysisError: String? = null,
+)
+
+private const val FILE_PAGE_SIZE = 200
 
 private data class PickedImportSource(
     val uri: Uri,
@@ -169,11 +203,14 @@ data class UiState(
     val checkedToday: Set<String> = emptySet(),
     val todos: List<TodoItem> = defaultTodoItems,
     val calendarEntries: List<CalendarEntry> = emptyList(),
+    val files: FileUiState = FileUiState(),
     val board: HomarrBoard? = null,
     val boardApps: List<HomarrApp> = emptyList(),
     val appStatus: Map<String, Boolean> = emptyMap(),
     val loadingBoard: Boolean = false,
     val boardError: String? = null,
+    /** 实验室地址通不通；null 表示还没探测过。false 时首页切到「离家模式」。 */
+    val labReachable: Boolean? = null,
 )
 
 class MainViewModel(private val app: AppContainer) : ViewModel() {
@@ -187,6 +224,9 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
     private var suggestionJob: Job? = null
     private var suggestionToken = 0
     private var uploadSeq = 0L
+    private var uploadJob: Job? = null
+    private var fileScanJob: Job? = null
+    private var fileQueryToken = 0
 
     init {
         viewModelScope.launch {
@@ -220,8 +260,8 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 _state.update { it.copy(settings = value) }
                 // 采集服务读不了 DataStore，这里把账本地址与凭证镜像给 SharedPreferences
                 NotifyPrefs.sync(app.appContext, value.billUrl, value.token)
-                // 照片自动同步是持久化周期任务，重复调用只会检查/补齐，不会重置排期
-                PhotoAutoSync.apply(app.appContext, value.photoAutoSync)
+                // 照片自动同步按设定整点排闹钟，重复调用只会刷新同一条
+                PhotoAutoSync.apply(app.appContext, value.photoAutoSync, value.photoSyncHour)
                 if (!bootstrapped &&
                     (value.billUrl.isNotBlank() ||
                         value.homarrUrl.isNotBlank() ||
@@ -238,6 +278,37 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         refreshHealth()
         refreshBills()
         refreshBoard()
+        probeReachability()
+    }
+
+    /**
+     * 首页用：对已配置的地址发一次 HEAD，4 秒内拿不到任何响应就算断。
+     * 优先探 Lab，没配 Lab 就探账本、Homarr。tailscale 没连上时三者都会一起失败。
+     */
+    fun probeReachability() {
+        val settings = _state.value.settings
+        val target = listOf(settings.labUrl, settings.billUrl, settings.homarrUrl)
+            .firstOrNull { it.isNotBlank() }
+        if (target == null) {
+            _state.update { it.copy(labReachable = null) }
+            return
+        }
+        viewModelScope.launch {
+            val reachable = withContext(Dispatchers.IO) {
+                runCatching {
+                    val client = app.http.newBuilder()
+                        .connectTimeout(3, TimeUnit.SECONDS)
+                        .readTimeout(3, TimeUnit.SECONDS)
+                        .callTimeout(4, TimeUnit.SECONDS)
+                        .build()
+                    client.newCall(Request.Builder().url(target).head().build())
+                        .execute()
+                        .close()
+                    true
+                }.getOrDefault(false)
+            }
+            _state.update { it.copy(labReachable = reachable) }
+        }
     }
 
     /** 看板内容没有 REST GET，只能走 tRPC；app 列表单独取，两路并行。 */
@@ -954,6 +1025,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                     lab = app.lab,
                     bill = app.bill,
                     calendar = app.calendar,
+                    files = app.files,
                     settings = settings,
                     provider = provider,
                     ai = app.aiClient,
@@ -1079,7 +1151,6 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                     seq = seq,
                     sinceDays = request.sinceDays,
                     query = request.query,
-                    limit = request.limit,
                     offset = request.offset,
                     count = request.count,
                     defaultDir = request.defaultDir,
@@ -1127,7 +1198,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         }
     }
 
-    /** 用户在弹窗里选好目录后真正开始上传，分批处理超过单批上限的照片。 */
+    /** 用户在弹窗里选好目录后真正开始上传；张数以弹窗里的 count 为准，不再往后多传。 */
     fun startPendingUpload(dir: String) {
         val pending = _state.value.pendingUpload ?: return
         if (pending.busy) return
@@ -1141,61 +1212,75 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 ),
             )
         }
-        viewModelScope.launch {
+        val startedAt = System.currentTimeMillis()
+        uploadJob = viewModelScope.launch {
             var uploaded = 0
             var skipped = 0
+            var cancelled = false
+            var totalBytes = 0L
             val failures = mutableListOf<String>()
             var error: String? = null
             try {
-                var offset = pending.offset
-                var batches = 0
-                while (batches < 10) {
-                    val candidates = app.deviceTools.recentPhotos(
-                        query = pending.query,
-                        sinceDays = pending.sinceDays,
-                        limit = pending.limit + 1,
-                        offset = offset,
-                    )
-                    val photos = candidates.take(pending.limit)
-                    if (photos.isEmpty()) break
+                val photos = app.deviceTools.recentPhotos(
+                    query = pending.query,
+                    sinceDays = pending.sinceDays,
+                    limit = pending.count,
+                    offset = pending.offset,
+                )
+                totalBytes = photos.sumOf { it.sizeBytes }
+                if (photos.isNotEmpty()) {
                     val batch = app.cloudreve.uploadAll(
                         baseUrl = settings.cloudreveUrl,
                         user = settings.cloudreveUser,
                         password = settings.cloudrevePassword,
                         remoteDir = target,
                         photos = photos,
+                        deviceName = settings.deviceName,
                         readBytes = { app.deviceTools.photoBytes(it.uri) },
-                        onProgress = { done, _ ->
+                        onProgress = { done, total, written, allBytes ->
+                            val seconds = ((System.currentTimeMillis() - startedAt) / 1000.0)
+                                .coerceAtLeast(1.0)
+                            val status = buildString {
+                                append("正在上传 ").append(done).append(" / ").append(total).append(" 张")
+                                if (allBytes > 0) {
+                                    append(" · ").append(fileSize(written))
+                                    append(" / ").append(fileSize(allBytes))
+                                }
+                                if (written > 0) {
+                                    append(" · ").append(fileSize((written / seconds).toLong())).append("/s")
+                                }
+                                append("…")
+                            }
                             _state.update { current ->
                                 current.pendingUpload?.let { state ->
-                                    current.copy(
-                                        pendingUpload = state.copy(
-                                            status = "正在上传 ${uploaded + done} 张…",
-                                        ),
-                                    )
+                                    current.copy(pendingUpload = state.copy(status = status))
                                 } ?: current
                             }
                         },
                     )
-                    uploaded += batch.uploaded.size
-                    skipped += batch.skipped.size
+                    uploaded = batch.uploaded.size
+                    skipped = batch.skipped.size
                     failures += batch.failed.map { "${it.name}：${it.error}" }
-                    offset += photos.size
-                    batches++
-                    if (candidates.size <= pending.limit) break
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
+            } catch (cancelledError: CancellationException) {
+                cancelled = true
             } catch (failure: Exception) {
                 error = readable(failure)
             }
             _state.update { it.copy(pendingUpload = null) }
             val summary = buildString {
                 append("上传到「").append(target).append("」：")
-                if (error != null) {
+                if (cancelled) {
+                    append("已取消，剩余照片不再上传，已传完的文件保留在云盘")
+                } else if (error != null) {
                     append("失败 —— ").append(error)
                 } else {
                     append("成功 ").append(uploaded).append(" 张")
+                    if (totalBytes > 0) {
+                        append("（").append(fileSize(totalBytes))
+                        append("，用时 ").append(humanDuration(System.currentTimeMillis() - startedAt))
+                        append("）")
+                    }
                     if (skipped > 0) append("，跳过 ").append(skipped).append(" 张同名文件")
                     if (failures.isNotEmpty()) {
                         append("，失败 ").append(failures.size).append(" 张：")
@@ -1212,12 +1297,19 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 ),
             )
             _state.update { it.copy(message = summary.take(120)) }
+            uploadJob = null
         }
     }
 
     fun cancelPendingUpload() {
         val pending = _state.value.pendingUpload ?: return
-        if (pending.busy) return
+        if (pending.busy) {
+            _state.update { current ->
+                current.copy(pendingUpload = current.pendingUpload?.copy(status = "正在取消…"))
+            }
+            uploadJob?.cancel()
+            return
+        }
         _state.update { it.copy(pendingUpload = null) }
         appendMessage(
             ChatMessage(
@@ -1310,19 +1402,314 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         }
     }
 
-    fun setFileTreeUri(uri: String) {
-        val updated = _state.value.settings.copy(fileTreeUri = uri)
+    fun addFileTreeUri(uri: String) {
+        val current = _state.value.settings
+        if (uri.isBlank() || current.fileTreeUris.contains(uri)) return
+        val updated = current.copy(fileTreeUris = current.fileTreeUris + uri)
         viewModelScope.launch {
             app.settings.save(updated)
-            _state.update { it.copy(settings = updated, message = "文件搜索目录已更新") }
+            app.files.clear()
+            _state.update {
+                it.copy(
+                    settings = updated,
+                    files = FileUiState(indexLoaded = true),
+                    message = "已添加扫描文件夹",
+                )
+            }
+        }
+    }
+
+    fun removeFileTreeUri(uri: String) {
+        val current = _state.value.settings
+        if (!current.fileTreeUris.contains(uri)) return
+        val updated = current.copy(fileTreeUris = current.fileTreeUris - uri)
+        viewModelScope.launch {
+            app.settings.save(updated)
+            app.files.clear()
+            _state.update {
+                it.copy(
+                    settings = updated,
+                    files = FileUiState(indexLoaded = true),
+                    message = if (updated.fileTreeUris.isEmpty()) {
+                        "已清除扫描范围"
+                    } else {
+                        "已移除扫描文件夹"
+                    },
+                )
+            }
         }
     }
 
     fun clearFileTree() {
-        val updated = _state.value.settings.copy(fileTreeUri = "")
+        val updated = _state.value.settings.copy(fileTreeUris = emptyList())
         viewModelScope.launch {
             app.settings.save(updated)
-            _state.update { it.copy(settings = updated, message = "已清除文件搜索目录") }
+            app.files.clear()
+            _state.update {
+                it.copy(
+                    settings = updated,
+                    files = FileUiState(indexLoaded = true),
+                    message = "已清除扫描范围",
+                )
+            }
+        }
+    }
+
+    /** 打开文件洞察时懒加载上次索引；完整条目留在仓库里。 */
+    fun loadFileInsight() {
+        if (_state.value.files.indexLoaded) return
+        viewModelScope.launch {
+            val index = app.files.load()
+            val insight = if (index != null) app.files.insight() else null
+            _state.update {
+                it.copy(
+                    files = it.files.copy(
+                        index = index,
+                        insight = insight,
+                        indexLoaded = true,
+                        scannedFiles = index?.totalFiles ?: 0,
+                    ),
+                )
+            }
+            refreshFileRows(reset = true)
+        }
+    }
+
+    fun startFileScan() {
+        val current = _state.value
+        if (current.files.scanning) return
+        if (current.settings.fileTreeUris.isEmpty()) {
+            _state.update { it.copy(message = "先添加扫描文件夹") }
+            return
+        }
+        fileScanJob?.cancel()
+        fileScanJob = viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    files = it.files.copy(
+                        scanning = true,
+                        scanError = null,
+                        scannedFiles = 0,
+                        currentDir = "",
+                        analysis = null,
+                        analysisOpen = false,
+                        analysisError = null,
+                    ),
+                )
+            }
+            try {
+                val index = app.files.scan(
+                    treeUris = current.settings.fileTreeUris,
+                    deviceName = current.settings.deviceName,
+                ) { progress ->
+                    _state.update { state ->
+                        state.copy(
+                            files = state.files.copy(
+                                scannedFiles = progress.files,
+                                currentDir = progress.currentDir,
+                            ),
+                        )
+                    }
+                }
+                val insight = app.files.insight()
+                _state.update {
+                    it.copy(
+                        files = it.files.copy(
+                            index = index,
+                            insight = insight,
+                            scanning = false,
+                            scannedFiles = index.totalFiles,
+                            currentDir = "",
+                            indexLoaded = true,
+                            view = FileView.All,
+                            shown = FILE_PAGE_SIZE,
+                            rows = emptyList(),
+                            totalMatches = 0,
+                            loading = true,
+                        ),
+                    )
+                }
+                refreshFileRows(reset = true)
+            } catch (cancelled: CancellationException) {
+                _state.update {
+                    it.copy(
+                        files = it.files.copy(scanning = false, currentDir = ""),
+                        message = "已取消扫描",
+                    )
+                }
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        files = it.files.copy(
+                            scanning = false,
+                            currentDir = "",
+                            scanError = readable(error),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelFileScan() {
+        if (!_state.value.files.scanning) return
+        fileScanJob?.cancel()
+    }
+
+    fun setFileView(view: FileView) {
+        if (_state.value.files.view == view) return
+        _state.update {
+            it.copy(files = it.files.copy(view = view, category = null, shown = FILE_PAGE_SIZE))
+        }
+        refreshFileRows(reset = true)
+    }
+
+    fun setFileCategory(category: FileCategory?) {
+        if (_state.value.files.category == category) return
+        _state.update { it.copy(files = it.files.copy(category = category, shown = FILE_PAGE_SIZE)) }
+        refreshFileRows(reset = true)
+    }
+
+    fun setFileQuery(query: String) {
+        _state.update { it.copy(files = it.files.copy(query = query, shown = FILE_PAGE_SIZE)) }
+        refreshFileRows(reset = true)
+    }
+
+    fun setFileSort(sort: FileSort) {
+        if (_state.value.files.sort == sort) return
+        _state.update { it.copy(files = it.files.copy(sort = sort, shown = FILE_PAGE_SIZE)) }
+        refreshFileRows(reset = true)
+    }
+
+    fun loadMoreFiles() {
+        val current = _state.value.files
+        if (current.rows.size >= current.totalMatches) return
+        val token = ++fileQueryToken
+        _state.update { it.copy(files = it.files.copy(loading = true)) }
+        viewModelScope.launch {
+            val result = app.files.list(
+                view = current.view,
+                filter = FileFilter(current.query, current.category, current.sort),
+                limit = current.shown + FILE_PAGE_SIZE,
+            )
+            if (token != fileQueryToken) return@launch
+            _state.update {
+                it.copy(
+                    files = it.files.copy(
+                        rows = result.rows,
+                        totalMatches = result.total,
+                        shown = result.rows.size,
+                        loading = false,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun refreshFileRows(reset: Boolean = false) {
+        val token = ++fileQueryToken
+        val current = _state.value.files
+        val limit = if (reset) FILE_PAGE_SIZE else current.shown.coerceAtLeast(FILE_PAGE_SIZE)
+        _state.update { it.copy(files = it.files.copy(loading = true)) }
+        viewModelScope.launch {
+            val result = app.files.list(
+                view = current.view,
+                filter = FileFilter(current.query, current.category, current.sort),
+                limit = limit,
+            )
+            if (token != fileQueryToken) return@launch
+            _state.update {
+                it.copy(
+                    files = it.files.copy(
+                        rows = result.rows,
+                        totalMatches = result.total,
+                        shown = result.rows.size,
+                        loading = false,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** 页面内一键分析：只发统计摘要与文件名，不进入聊天会话。 */
+    fun analyzeFiles() {
+        val files = _state.value.files
+        if (files.insight == null) {
+            _state.update { it.copy(message = "先扫描一次，再让小砂糖分析") }
+            return
+        }
+        if (files.analysisLoading) return
+        val settings = _state.value.settings
+        val provider = settings.aiProviders.firstOrNull { it.id == settings.aiSelectedId }
+            ?: settings.aiProviders.firstOrNull()
+        if (provider == null) {
+            openFileAnalysisError("还没有可用的 AI 服务商，去 设置 → 小砂糖 添加。")
+            return
+        }
+        if (provider.baseUrl.isBlank() || provider.model.isBlank()) {
+            openFileAnalysisError("「${provider.name}」还没有填写 Base URL 或模型。")
+            return
+        }
+        if (provider.apiKey.isBlank() && provider.requiresKey) {
+            openFileAnalysisError("「${provider.name}」还没有填写 API Key。")
+            return
+        }
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    files = it.files.copy(
+                        analysisOpen = true,
+                        analysisLoading = true,
+                        analysisError = null,
+                    ),
+                )
+            }
+            runCatching { app.aiAgent.analyzeFileInsight(provider, app.files.brief().orEmpty()) }
+                .onSuccess { text ->
+                    _state.update {
+                        it.copy(
+                            files = it.files.copy(
+                                analysis = text,
+                                analysisLoading = false,
+                                analysisError = null,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            files = it.files.copy(
+                                analysisLoading = false,
+                                analysisError = readable(error),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun showFileAnalysis() {
+        if (_state.value.files.analysis == null) {
+            analyzeFiles()
+            return
+        }
+        _state.update { it.copy(files = it.files.copy(analysisOpen = true)) }
+    }
+
+    fun closeFileAnalysis() {
+        _state.update { it.copy(files = it.files.copy(analysisOpen = false)) }
+    }
+
+    private fun openFileAnalysisError(message: String) {
+        _state.update {
+            it.copy(
+                files = it.files.copy(
+                    analysisOpen = true,
+                    analysisLoading = false,
+                    analysisError = message,
+                ),
+            )
         }
     }
 
@@ -1343,8 +1730,10 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             - 不要为了确认环境或展示能力而调用工具，也不要把一次简单提问拆成多次工具调用。
             相册相关任务：
             - 查找和识别：find_photos 返回后，应用会把照片缩略图显示在对话里；调用 describe_photo 时把 uri 原样传过去。如果 describe_photo 返回 error（打不开图片），重新 find_photos 拿新 uri，或把照片文件名传给 name 再试一次，不要用同一个失效 uri 连续重试。
+            - 历史里出现过“打不开这张图片”不代表现在也打不开（解码逻辑已修复）。用户再次要求识别时，必须重新调用 describe_photo 实际试一次，不要凭之前的失败直接回答“还是不行”，也不要在没调用工具时说“我重新试过了”。
             - 只想要提示词就停在 describe_photo；只有用户明确要求出图才调用 generate_image。
             - 上传到 Cloudreve：用户说“把最近 N 天的照片传到云盘/Cloudreve”时，直接调用 upload_recent_photos。调用后应用会弹出文件夹选择，用户选定目录后才真正上传；回答里只说明找到多少张、请用户在弹出的窗口里选目录，不要说“已上传完成”。用户取消弹窗时不要自动重试上传。
+            - 参数要按用户的说法传：“最近 N 天”传 since_days=N；“只传 N 张”传 limit=N；两者都说了就都传。不要把“N 张”当成“最近 N 天”，也不要用默认张数代替用户明确说的张数；N 没说才用默认值。
             - 没有相册权限时引导去 设置 → 权限 授权相册；没配 Cloudreve 时引导去 设置 → 连接 填 WebDAV 地址、注册邮箱和 Cloudreve WebDAV 账户生成的密码（不是登录密码）。
             你的查询默认只读；可以写数据的例外只有四个：把生成的图片保存到相册、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）、把用户明确指定的照片上传到 Cloudreve。不能修改或删除已有文件，不能启停容器，不能修改设置。
             账本问题：
@@ -1354,6 +1743,11 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             - 返回里的 sums 是整月合计，filtered_sums 才是按 month/type/minAmount 筛选后的合计；算大额消费合计用后者。
             - 用户点名排除的转账或某笔（例如给老爸转的 4000）先从结果里剔除，并说明它是转账而不是消费；不要把转账混进消费合计。
             - 回答先给结论或合计，再列金额最大的几笔；如果 count 大于 returned，说明只列了前 N 笔。
+            文件与存储：
+            - 用户问“手机里什么最占空间 / 有没有重复文件 / 大文件 / 缓存”时，先调用 file_insight_summary。
+            - 没有索引时说明需要先打开 首页快捷面板 → 文件洞察 扫描一次，不要假装已经扫描过。
+            - 需要具体文件时用 search_indexed_files；不要用 find_files 做全盘遍历。
+            - 只能读取文件元数据，不能删除或移动文件；建议里要区分“可以删”与“先确认”。
             界面自动化（微信等第三方 App）：
             - 动手前先调用 automation_status；无障碍没开就告诉用户去 设置 → 无障碍 → 已下载的应用 打开「poi's home」，不要假装已经操作。
             - 固定顺序：automation_status → open_app → wait_for_ui 或 list_screen → click_ui / input_text → list_screen 复核 → press_key。
@@ -1396,6 +1790,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             if (value.labUrl.isNotBlank()) refreshHealth()
             if (value.billUrl.isNotBlank()) refreshBills()
             if (value.homarrUrl.isNotBlank()) refreshBoard()
+            probeReachability()
         }
     }
 
@@ -1518,4 +1913,9 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             return MainViewModel(app) as T
         }
     }
+}
+
+private fun humanDuration(ms: Long): String {
+    val seconds = (ms / 1000).coerceAtLeast(1)
+    return if (seconds >= 60) "${seconds / 60} 分 ${seconds % 60} 秒" else "$seconds 秒"
 }
