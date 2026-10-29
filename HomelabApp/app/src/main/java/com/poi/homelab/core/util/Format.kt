@@ -73,3 +73,22 @@ fun stateLabel(state: String): String = when (state) {
     "created" -> "已创建"
     else -> state.ifBlank { "未知" }
 }
+
+/** "2026-10-29T21:10:00+08:00" → "10-29 21:10"；格式不认识时原样返回。 */
+fun shortIsoTimestamp(value: String?): String {
+    if (value.isNullOrBlank()) return "时间未知"
+    return if (value.length >= 16) {
+        value.substring(5, 16).replace('T', ' ')
+    } else {
+        value
+    }
+}
+
+/** 余额来源（account.balance_source / candidate.source）转中文。 */
+fun balanceSourceLabel(source: String?): String = when (source) {
+    "sms" -> "短信"
+    "notification" -> "通知"
+    "ocr" -> "截图识别"
+    "manual" -> "手工"
+    else -> "未知来源"
+}

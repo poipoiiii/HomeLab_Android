@@ -343,10 +343,18 @@ fun HomeScreen(
             }
 
             if (!offline) {
+                val pendingBalances = state.overview?.pendingBalanceCandidates ?: 0
                 item {
                     SectionHeader(
                         title = "更多",
-                        subtitle = if (moreExpanded) null else "净资产 · 日程 · 主机 · 天气 · 设备",
+                        subtitle = if (moreExpanded) {
+                            null
+                        } else {
+                            buildString {
+                                if (pendingBalances > 0) append("$pendingBalances 条余额待确认 · ")
+                                append("净资产 · 日程 · 主机 · 天气 · 设备")
+                            }
+                        },
                         action = {
                             InlineAction(
                                 text = if (moreExpanded) "收起" else "展开",

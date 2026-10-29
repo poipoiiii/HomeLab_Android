@@ -31,7 +31,10 @@ import com.poi.homelab.core.ui.theme.OnDark
 import com.poi.homelab.core.ui.theme.OnDarkSoft
 import com.poi.homelab.core.ui.theme.Success
 import com.poi.homelab.core.ui.theme.Teal
+import com.poi.homelab.core.ui.theme.Warning
+import com.poi.homelab.core.util.balanceSourceLabel
 import com.poi.homelab.core.util.money
+import com.poi.homelab.core.util.shortIsoTimestamp
 import com.poi.homelab.feature.bills.BillOverview
 import com.poi.homelab.feature.calendar.CALENDAR_TRAVEL
 import com.poi.homelab.feature.calendar.CalendarEntry
@@ -52,6 +55,18 @@ internal fun NetWorthCard(overview: BillOverview, onOpenBills: () -> Unit) {
             InlineAction("账单", onOpenBills)
         }
         val accounts = overview.accounts
+        // 取最近一次被确认的余额时间，服务端没给就整行不显示
+        val freshest = accounts.maxByOrNull { it.balanceUpdatedAt.orEmpty() }
+            ?.takeIf { !it.balanceUpdatedAt.isNullOrBlank() }
+        if (freshest != null) {
+            Text(
+                text = "余额更新于 ${shortIsoTimestamp(freshest.balanceUpdatedAt)}" +
+                    " · ${balanceSourceLabel(freshest.balanceSource)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnDarkSoft,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
         if (accounts.isNotEmpty()) {
             ThinDivider(Modifier.padding(vertical = 12.dp))
             accounts.take(4).forEach { account ->
@@ -81,6 +96,21 @@ internal fun NetWorthCard(overview: BillOverview, onOpenBills: () -> Unit) {
                     color = OnDarkSoft,
                     modifier = Modifier.padding(top = 6.dp),
                 )
+            }
+        }
+        if (overview.pendingBalanceCandidates > 0) {
+            ThinDivider(Modifier.padding(vertical = 12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "${overview.pendingBalanceCandidates} 条余额待确认",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Warning,
+                    modifier = Modifier.weight(1f),
+                )
+                InlineAction("去确认", onOpenBills)
             }
         }
     }

@@ -87,9 +87,11 @@ import com.poi.homelab.core.ui.theme.Muted
 import com.poi.homelab.core.ui.theme.OnDark
 import com.poi.homelab.core.ui.theme.OnDarkSoft
 import com.poi.homelab.core.ui.theme.SuccessStrong
+import com.poi.homelab.core.util.balanceSourceLabel
 import com.poi.homelab.core.util.money
 import com.poi.homelab.core.util.monthLabel
 import com.poi.homelab.core.util.plainAmount
+import com.poi.homelab.core.util.shortIsoTimestamp
 import com.poi.homelab.core.util.typeLabel
 import com.poi.homelab.feature.bills.BalanceCandidate
 import com.poi.homelab.feature.bills.BillAccount
@@ -1831,7 +1833,7 @@ private fun BalanceCandidateRow(
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Text(
-                    text = "${balanceSourceLabel(candidate.source)} · ${shortIso(candidate.observedAt)}",
+                    text = "${balanceSourceLabel(candidate.source)} · ${shortIsoTimestamp(candidate.observedAt)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Muted,
                     modifier = Modifier.padding(top = 2.dp),
@@ -1884,20 +1886,6 @@ private fun BalanceCandidateRow(
     }
 }
 
-private fun balanceSourceLabel(source: String?): String = when (source) {
-    "sms" -> "短信"
-    "notification" -> "通知"
-    "ocr" -> "截图识别"
-    "manual" -> "手工"
-    else -> "未知来源"
-}
-
-/** "2026-10-29T21:10:00+08:00" → "10-29 21:10"；只有日期时原样返回。 */
-private fun shortIso(value: String?): String {
-    if (value.isNullOrBlank()) return "时间未知"
-    return if (value.length >= 16) value.substring(5, 16).replace('T', ' ') else value
-}
-
 @Composable
 private fun AccountChip(account: BillAccount) {
     Surface(
@@ -1922,7 +1910,7 @@ private fun AccountChip(account: BillAccount) {
                 text = if (account.balanceUpdatedAt.isNullOrBlank()) {
                     "余额未确认"
                 } else {
-                    "${balanceSourceLabel(account.balanceSource)} · ${shortIso(account.balanceUpdatedAt)}"
+                    "${balanceSourceLabel(account.balanceSource)} · ${shortIsoTimestamp(account.balanceUpdatedAt)}"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = Muted,
