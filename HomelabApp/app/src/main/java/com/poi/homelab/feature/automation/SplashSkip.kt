@@ -57,6 +57,16 @@ object SplashSkip {
         "com.qiyi.video",            // 爱奇艺
         "com.tencent.qqlive",        // 腾讯视频
         "com.youku.phone",           // 优酷
+        "com.baidu.tieba",           // 百度贴吧
+        "com.xiaomi.shop",           // 小米商城
+        "com.sankuai.meituan",       // 美团
+        "com.xunmeng.pinduoduo",     // 拼多多
+        "com.tencent.androidqqmail", // QQ 邮箱
+        "com.xueqiu.android",        // 雪球
+        "com.max.xiaoheihe",         // 小黑盒
+        "com.taptap",                // TapTap
+        "com.hpbr.bosszhipin",       // BOSS 直聘
+        "com.miui.player",           // 小米音乐
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())

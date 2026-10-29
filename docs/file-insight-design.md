@@ -38,9 +38,7 @@
 
 因此产品文案统一写「**本机可访问文件**」，不要写「手机里的全部文件」。
 
-实现路线：`ActivityResultContracts.OpenDocumentTree` + `takePersistableUriPermission(READ)`，用 `DocumentsContract` 查询目录（比 `DocumentFile.listFiles()` 快得多）。用户选择「内部存储」根目录时，覆盖绝大多数可见文件；也可以只选 Download、DCIM 等子目录。
-
-复用现有设置项 `AppSettings.fileTreeUri` 作为唯一扫描范围，不新增权限、不新增授权入口；同一份授权同时服务 `find_files` 和文件洞察。v1 只支持一个根目录，换范围即替换（多根目录列为 P1）。
+实现路线：`ActivityResultContracts.OpenDocumentTree` + `takePersistableUriPermission(READ)`，用 `DocumentsContract` 查询目录（比 `DocumentFile.listFiles()` 快得多）。Android 11+ 的系统选择器通常不允许选中内部存储根目录（会提示「无法使用此文件夹」），因此改为**逐个添加文件夹**：DCIM、Download、Documents、Pictures 等，每个文件夹单独授权、合并扫描。`AppSettings.fileTreeUris` 保存全部授权；同一份列表同时服务 `find_files` 和文件洞察。
 
 ## 4. 用户流程
 
@@ -49,7 +47,7 @@
 设置 → 权限 → 扫描范围 ──▶ 文件洞察
         │
         ▼
-未授权：选择扫描范围（系统目录选择器，选内部存储）
+未授权：逐个添加文件夹（系统目录选择器，选 DCIM / Download / Documents 等）
         │
         ▼
 开始扫描 ──▶ 进度：已扫描 12,340 个文件 · 当前 DCIM/Camera ──▶ 可取消
@@ -67,7 +65,7 @@
 
 ### P0（本次实现）
 
-1. 扫描范围：选择 / 更换 / 清除授权；显示根目录名称。
+1. 扫描范围：支持添加多个文件夹（DCIM、Download、Documents 等），可单个移除或全部清除；同一个 URI 不会重复添加。
 2. 扫描：进度、当前目录、取消、5 万文件上限、跳过受限目录、错误目录计数。
 3. 本地索引：gzip JSON 落内部存储；重启后懒加载；扫描失败/取消不覆盖旧索引。
 4. 概览：
@@ -113,9 +111,11 @@
 │ ←  文件洞察                     扫描 ⟳  │
 ├────────────────────────────────────────┤
 │ 扫描范围卡                              │
-│  内部存储 · 整机可访问文件               │
+│  已添加 2 个文件夹                       │
+│  DCIM                            移除    │
+│  Download                        移除    │
 │  上次扫描：今天 14:32 · 12,340 个文件    │
-│  [重新选择范围]        [开始扫描]        │
+│  [添加文件夹]          [开始扫描]        │
 ├────────────────────────────────────────┤
 │ （扫描中）已扫描 12,340 个文件…          │
 │  ▓▓▓▓▓▓▓▓▓░░░░░░  取消                  │
@@ -233,18 +233,18 @@ val projection = arrayOf(
 ```kotlin
 @Serializable
 data class FileEntry(
-    val path: String,       // 相对根目录，如 "DCIM/Camera/IMG_0001.jpg"
+    val path: String,       // 相对所属文件夹，如 "Camera/IMG_0001.jpg"
     val name: String,
     val size: Long,
     val modified: Long,
     val mime: String,
+    val root: String,       // 所属授权文件夹名称，如 "DCIM"
 )
 
 @Serializable
 data class FileIndexSnapshot(
-    val version: Int = 1,
-    val rootUri: String,
-    val rootName: String,
+    val version: Int = 2,
+    val roots: List<String>,   // 本次扫描的文件夹名称
     val deviceName: String,
     val scannedAt: Long,
     val durationMs: Long,
@@ -377,7 +377,7 @@ data class FileUiState(
 
 ## 10. 已确认的默认值
 
-1. **扫描范围**：单根目录，引导用户选「内部存储」；也允许只选子目录，界面按实际范围展示。
+1. **扫描范围**：多文件夹，逐个添加 DCIM、Download、Documents 等；Android 11+ 无法直接授权内部存储根目录。
 2. **入口**：首页右下角快捷面板 + 设置 → 权限 → 扫描范围；不新增底部导航 tab。
 3. **AI 深度**：页面内一键分析 + AI 对话工具（`file_insight_summary` / `search_indexed_files`）。
 4. **内容分析**：只分析元数据，不读取文件内容；文本/图片内容分析留到后续版本。

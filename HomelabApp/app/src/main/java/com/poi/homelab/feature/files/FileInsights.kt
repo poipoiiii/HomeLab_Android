@@ -51,8 +51,9 @@ object FileInsights {
         val dirBytes = HashMap<String, Long>()
         val dirCounts = HashMap<String, Int>()
         entries.forEach { entry ->
-            val display = entry.displayPath
-            val head = if (display.contains('/')) display.substringBefore('/') else "(根目录)"
+            // 多范围时按「文件夹/一级子目录」聚合，避免所有文件都被归到根文件夹名
+            val parts = entry.displayPath.split('/')
+            val head = if (parts.size <= 2) parts.first() else parts.take(2).joinToString("/")
             dirBytes[head] = (dirBytes[head] ?: 0L) + entry.size
             dirCounts[head] = (dirCounts[head] ?: 0) + 1
         }

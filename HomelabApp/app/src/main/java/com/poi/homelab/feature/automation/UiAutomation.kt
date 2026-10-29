@@ -41,6 +41,7 @@ class UiAutomationService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        JumpGuard.onEvent(this, event)
         SplashSkip.onEvent(this, event)
     }
 

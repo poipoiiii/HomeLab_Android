@@ -65,7 +65,14 @@ class FileScanner(private val context: Context) {
                 .getOrNull()
                 ?.takeIf { it.isNotBlank() }
                 ?: "文件夹 ${rootIndex + 1}"
-            roots += rootName
+            // 内部存储和 SD 卡可能都有 Download，重名时加序号避免展示与列表 key 冲突
+            var displayName = rootName
+            var suffix = 2
+            while (roots.contains(displayName)) {
+                displayName = "$rootName ($suffix)"
+                suffix++
+            }
+            roots += displayName
 
             val stack = ArrayDeque<DirNode>()
             stack.addLast(DirNode(rootDocumentId, "", 0))
@@ -75,7 +82,7 @@ class FileScanner(private val context: Context) {
                 val children = runCatching { queryChildren(context.contentResolver, uri, node.documentId) }
                     .getOrElse {
                         if (skippedDirs.size < MAX_SKIPPED_DIRS) {
-                            skippedDirs += joinPath(rootName, node.path)
+                            skippedDirs += joinPath(displayName, node.path)
                         }
                         emptyList()
                     }
@@ -105,7 +112,7 @@ class FileScanner(private val context: Context) {
                         size = child.size,
                         modified = child.modified,
                         mime = child.mime,
-                        root = rootName,
+                        root = displayName,
                     )
                     files++
                     bytes += child.size
@@ -120,7 +127,7 @@ class FileScanner(private val context: Context) {
                             ScanProgress(
                                 files = files,
                                 dirs = dirs,
-                                currentDir = joinPath(rootName, node.path),
+                                currentDir = joinPath(displayName, node.path),
                             ),
                         )
                     }

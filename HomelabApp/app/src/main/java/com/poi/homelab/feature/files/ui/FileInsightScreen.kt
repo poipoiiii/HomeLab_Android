@@ -127,10 +127,18 @@ fun FileInsightScreen(
         roots = if (isPreview) {
             listOf("content://preview/dcim" to "DCIM")
         } else {
+            val used = mutableListOf<String>()
             rootUris.mapIndexed { index, uri ->
-                val name = runCatching {
+                val base = runCatching {
                     DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
                 }.getOrNull()?.takeIf { it.isNotBlank() } ?: "文件夹 ${index + 1}"
+                var name = base
+                var suffix = 2
+                while (used.contains(name)) {
+                    name = "$base ($suffix)"
+                    suffix++
+                }
+                used += name
                 uri to name
             }
         }
