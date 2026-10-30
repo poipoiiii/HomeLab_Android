@@ -35,6 +35,7 @@ import com.poi.homelab.feature.bills.BillSums
 import com.poi.homelab.feature.bills.BillTransaction
 import com.poi.homelab.feature.bills.TransactionPage
 import com.poi.homelab.feature.calendar.CalendarEntry
+import com.poi.homelab.feature.calendar.CalendarReminder
 import com.poi.homelab.feature.files.FileCategory
 import com.poi.homelab.feature.files.FileEntry
 import com.poi.homelab.feature.files.FileFilter
@@ -49,18 +50,39 @@ import com.poi.homelab.feature.homarr.WeatherSnapshot
 import com.poi.homelab.feature.home.defaultTodoItems
 import com.poi.homelab.feature.home.TodoItem
 import com.poi.homelab.feature.lab.HealthSnapshot
+import com.poi.homelab.feature.market.DailyBar
+import com.poi.homelab.feature.market.IntradaySeries
+import com.poi.homelab.feature.market.MarketEvent
+import com.poi.homelab.feature.market.MarketMind
+import com.poi.homelab.feature.market.MarketNews
+import com.poi.homelab.feature.market.MarketQuote
+import com.poi.homelab.feature.market.MarketScorer
+import com.poi.homelab.feature.market.MarketSearchResult
+import com.poi.homelab.feature.market.MarketSymbol
+import com.poi.homelab.feature.market.NewsFeedback
+import com.poi.homelab.feature.market.allMarketSymbols
+import com.poi.homelab.feature.market.defaultMarketSymbols
+import com.poi.homelab.feature.market.defaultPinnedMarketSymbols
+import com.poi.homelab.feature.market.findMarketSymbol
 import com.poi.homelab.feature.notify.NotifyPrefs
 import com.poi.homelab.feature.photos.PhotoAutoSync
 import com.poi.homelab.feature.weather.HomeWeather
+import com.poi.homelab.feature.watch.CbgTarget
+import com.poi.homelab.feature.watch.WatchAlarm
+import com.poi.homelab.feature.watch.WatchNotifier
+import com.poi.homelab.feature.watch.WatchRule
+import com.poi.homelab.feature.watch.WatchSettings
 import java.io.IOException
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.time.YearMonth
+import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ConcurrentHashMap
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -172,6 +194,44 @@ private fun String.guessMime(): String = when (importExtension()) {
 /** 使用时长 / 存储排行的一行，值已经格式化成可直接显示的文本。 */
 data class UsageRank(val label: String, val value: String)
 
+/** 监控页状态：规则与商品类型候选。 */
+data class WatchUiState(
+    val rules: List<WatchRule> = emptyList(),
+    val loaded: Boolean = false,
+    val types: List<CbgTarget> = emptyList(),
+    val typesKind: Int = 3,
+    val typesLoading: Boolean = false,
+    val typesError: String? = null,
+    val running: Boolean = false,
+    val runningRuleId: String? = null,
+)
+
+/** 行情页的状态：消息、财报日历、详情日 K 和 AI 分析。 */
+data class MarketUiState(
+    val news: List<MarketNews> = emptyList(),
+    val newsLoading: Boolean = false,
+    val newsError: String? = null,
+    val events: List<MarketEvent> = emptyList(),
+    val eventsLoading: Boolean = false,
+    val eventsError: String? = null,
+    val eventsDate: String = "",
+    val mind: MarketMind = MarketMind(),
+    val bars: List<DailyBar> = emptyList(),
+    val barsSymbol: String = "",
+    val barsLoading: Boolean = false,
+    val barsError: String? = null,
+    val aiText: String? = null,
+    val aiSymbol: String = "",
+    val aiLoading: Boolean = false,
+    val aiError: String? = null,
+    val intraday: IntradaySeries? = null,
+    val intradaySymbol: String = "",
+    val intradayLoading: Boolean = false,
+    val intradayError: String? = null,
+    /** 长按行情卡片时的快速预览；为空表示不显示分时弹窗。 */
+    val previewSymbol: String? = null,
+)
+
 data class UiState(
     val settings: AppSettings = AppSettings(),
     val health: HealthSnapshot? = null,
@@ -219,13 +279,18 @@ data class UiState(
     val checkedToday: Set<String> = emptySet(),
     val todos: List<TodoItem> = defaultTodoItems,
     val calendarEntries: List<CalendarEntry> = emptyList(),
+    /** 日历页按当前月份只读加载的账本流水，和账单页的 billMonth 互不影响。 */
+    val calendarBillsMonth: String = "",
+    val calendarTransactions: List<BillTransaction> = emptyList(),
+    val calendarBillsLoading: Boolean = false,
+    val calendarBillsError: String? = null,
     val files: FileUiState = FileUiState(),
     val board: HomarrBoard? = null,
     val boardApps: List<HomarrApp> = emptyList(),
     val appStatus: Map<String, Boolean> = emptyMap(),
     val loadingBoard: Boolean = false,
     val boardError: String? = null,
-    /** 实验室地址通不通以及原因；null 表示还没探测过。非 Online 时首页切到「离家模式」。 */
+    /** 实验室地址通不通以及原因；null 表示还没探测过。非 Online 时首页切到「脱机模式」。 */
     val labReachability: Reachability? = null,
     /** 首页天气卡；没填城市时为 null。 */
     val weather: HomeWeather? = null,
@@ -236,6 +301,14 @@ data class UiState(
     val storageRows: List<UsageRank> = emptyList(),
     val usageAccess: Boolean = true,
     val loadingUsage: Boolean = false,
+    /** 首页行情卡片：直连公开行情接口，不依赖家里服务器。 */
+    val marketQuotes: List<MarketQuote> = emptyList(),
+    val marketLoading: Boolean = false,
+    val marketError: String? = null,
+    val marketUpdatedAt: Long = 0L,
+    val market: MarketUiState = MarketUiState(),
+    /** 藏宝阁捡漏。 */
+    val watch: WatchUiState = WatchUiState(),
 )
 
 class MainViewModel(private val app: AppContainer) : ViewModel() {
@@ -253,6 +326,14 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
     private var fileScanJob: Job? = null
     private var fileQueryToken = 0
     private var probeJob: Job? = null
+    private var marketJob: Job? = null
+    private var marketBootstrapped = false
+    private val marketMindMutex = Mutex()
+    private var marketMind = MarketMind()
+    private val marketBarsCache = mutableMapOf<String, List<DailyBar>>()
+    private val marketIntradayCache = mutableMapOf<String, IntradaySeries>()
+    private var marketRefreshJob: Job? = null
+    private var marketExtrasJob: Job? = null
 
     /** 网络 / VPN 一变就重探，这样切 Tailscale 后不用手动下拉刷新。 */
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -285,6 +366,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             val items = app.todo.load()
             _state.update { it.copy(todos = items) }
         }
+        loadMarketMind()
         viewModelScope.launch {
             val lastSync = BillImportHistory.load(app.appContext)
             _state.update { it.copy(billImportLastSync = lastSync) }
@@ -293,6 +375,8 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         viewModelScope.launch {
             app.calendar.entries.collect { entries ->
                 _state.update { it.copy(calendarEntries = entries) }
+                // 记录增删改后重排闹钟；cancel 掉已关提醒或已删除的
+                CalendarReminder.syncAll(app.appContext, entries)
             }
         }
         viewModelScope.launch {
@@ -302,6 +386,11 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 NotifyPrefs.sync(app.appContext, value.billUrl, value.token)
                 // 照片自动同步按设定整点排闹钟，重复调用只会刷新同一条
                 PhotoAutoSync.apply(app.appContext, value.photoAutoSync, value.photoSyncHour)
+                // 行情不依赖 Lab / 账本，设置一读完就先拉一次
+                if (!marketBootstrapped) {
+                    marketBootstrapped = true
+                    refreshMarket()
+                }
                 if (!bootstrapped &&
                     (value.billUrl.isNotBlank() ||
                         value.homarrUrl.isNotBlank() ||
@@ -312,6 +401,112 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 }
             }
         }
+        viewModelScope.launch {
+            app.watch.settings.collect { value ->
+                _state.update {
+                    it.copy(
+                        watch = it.watch.copy(
+                            rules = value.rules,
+                            loaded = true,
+                        ),
+                    )
+                }
+            }
+        }
+        // 每次启动重排一次闹钟，避免清理数据或覆盖安装后没有下一次检测
+        viewModelScope.launch { WatchAlarm.scheduleNext(app.appContext, app.watch.load()) }
+    }
+
+    // ---- 价格监控 ----
+
+    fun testWatchNotification() {
+        WatchNotifier.notifyTest(app.appContext)
+        _state.update { it.copy(message = "已发送测试通知") }
+    }
+
+    fun saveWatchRule(rule: WatchRule) {
+        viewModelScope.launch {
+            saveWatch { settings ->
+                val exists = settings.rules.any { it.id == rule.id }
+                settings.copy(
+                    rules = if (exists) {
+                        settings.rules.map { if (it.id == rule.id) rule else it }
+                    } else {
+                        settings.rules + rule
+                    },
+                )
+            }
+            // 保存后立刻跑一次，用户不用等下一个整点才知道结果
+            val report = runCatching { app.watchEngine.run(ruleId = rule.id, force = true) }
+            val text = report.getOrNull()?.text ?: "规则已保存"
+            _state.update { it.copy(message = text) }
+        }
+    }
+
+    fun deleteWatchRule(id: String) {
+        viewModelScope.launch {
+            saveWatch { settings -> settings.copy(rules = settings.rules.filterNot { it.id == id }) }
+        }
+    }
+
+    fun toggleWatchRule(id: String, enabled: Boolean) {
+        viewModelScope.launch {
+            saveWatch { settings ->
+                settings.copy(
+                    rules = settings.rules.map { if (it.id == id) it.copy(enabled = enabled) else it },
+                )
+            }
+        }
+    }
+
+    fun runWatchNow(ruleId: String? = null) {
+        if (_state.value.watch.running) return
+        _state.update { it.copy(watch = it.watch.copy(running = true, runningRuleId = ruleId)) }
+        viewModelScope.launch {
+            val result = runCatching { app.watchEngine.run(ruleId = ruleId, force = true) }
+            val text = result.getOrNull()?.text
+                ?: result.exceptionOrNull()?.let(::readable)
+                ?: "检测失败"
+            _state.update {
+                it.copy(
+                    watch = it.watch.copy(running = false, runningRuleId = null),
+                    message = text,
+                )
+            }
+        }
+    }
+
+    fun loadWatchTypes(kindId: Int) {
+        val current = _state.value.watch
+        if (current.typesKind == kindId && current.types.isNotEmpty()) return
+        _state.update {
+            it.copy(watch = it.watch.copy(typesKind = kindId, typesLoading = true, typesError = null))
+        }
+        viewModelScope.launch {
+            val result = runCatching { app.cbg.equipTypes(kindId) }
+            _state.update { state ->
+                if (state.watch.typesKind != kindId) return@update state
+                val types = result.getOrNull()
+                if (types == null) {
+                    state.copy(
+                        watch = state.watch.copy(
+                            typesLoading = false,
+                            typesError = result.exceptionOrNull()?.let(::readable) ?: "读取商品列表失败",
+                        ),
+                    )
+                } else {
+                    state.copy(
+                        watch = state.watch.copy(types = types, typesLoading = false, typesError = null),
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun saveWatch(block: (WatchSettings) -> WatchSettings) {
+        val updated = block(app.watch.load())
+        app.watch.save(updated)
+        WatchAlarm.scheduleNext(app.appContext, updated)
     }
 
     fun refreshAll() {
@@ -320,6 +515,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         refreshBoard()
         probeReachability()
         refreshWeather()
+        refreshMarket()
     }
 
     /**
@@ -361,6 +557,442 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                 .onFailure { error ->
                     _state.update { it.copy(loadingWeather = false, weatherError = readable(error)) }
                 }
+        }
+    }
+
+    /** 编辑里连续点箭头时合并成一次刷新，避免每点一下都打接口。 */
+    private fun scheduleMarketRefresh() {
+        marketRefreshJob?.cancel()
+        marketRefreshJob = viewModelScope.launch {
+            delay(250)
+            refreshMarket()
+        }
+    }
+
+    /**
+     * 首页行情卡：直连东财 / 腾讯，不经过 Lab。
+     * 前一次请求还没回来就取消，避免轮询叠在一起。
+     */
+    fun refreshMarket() {
+        val settings = _state.value.settings
+        val symbols = allMarketSymbols(settings.marketPinnedSymbols, settings.marketSymbols)
+        if (symbols.isEmpty()) {
+            _state.update {
+                it.copy(marketQuotes = emptyList(), marketLoading = false, marketError = null)
+            }
+            return
+        }
+        marketJob?.cancel()
+        marketJob = viewModelScope.launch {
+            _state.update { it.copy(marketLoading = true) }
+            runCatching { app.market.quotes(symbols) }
+                .onSuccess { quotes ->
+                    val allFailed = quotes.isNotEmpty() && quotes.all { it.price == null }
+                    _state.update {
+                        it.copy(
+                            marketQuotes = quotes,
+                            marketLoading = false,
+                            marketUpdatedAt = System.currentTimeMillis(),
+                            marketError = if (allFailed) {
+                                quotes.firstNotNullOfOrNull { quote -> quote.error }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(marketLoading = false, marketError = readable(error)) }
+                }
+        }
+    }
+
+    /** 自选增删后立即落盘并重拉一次；置顶项不重复出现在自选里。 */
+    fun saveMarketSymbols(symbols: List<MarketSymbol>, refreshQuotes: Boolean = true) {
+        val pinnedIds = _state.value.settings.marketPinnedSymbols.map { it.id }.toSet()
+        val cleaned = symbols.distinctBy { it.id }.filterNot { it.id in pinnedIds }
+        val updated = _state.value.settings.copy(marketSymbols = cleaned)
+        viewModelScope.launch {
+            app.settings.saveMarketSymbols(cleaned)
+            _state.update { it.copy(settings = updated) }
+            if (refreshQuotes) scheduleMarketRefresh()
+        }
+    }
+
+    /** 置顶一行支持自定义排序和增删；移出置顶的会自动回到自选。 */
+    fun saveMarketPinnedSymbols(symbols: List<MarketSymbol>, refreshQuotes: Boolean = true) {
+        val cleaned = symbols.distinctBy { it.id }
+        val pinnedIds = cleaned.map { it.id }.toSet()
+        val current = _state.value.settings
+        val removed = current.marketPinnedSymbols.filterNot { it.id in pinnedIds }
+        val watchlist = (current.marketSymbols + removed)
+            .distinctBy { it.id }
+            .filterNot { it.id in pinnedIds }
+        val updated = current.copy(
+            marketPinnedSymbols = cleaned,
+            marketSymbols = watchlist,
+        )
+        viewModelScope.launch {
+            app.settings.saveMarketPinnedSymbols(cleaned)
+            app.settings.saveMarketSymbols(watchlist)
+            _state.update { it.copy(settings = updated) }
+            if (refreshQuotes) scheduleMarketRefresh()
+        }
+    }
+
+    fun resetMarketSymbols() {
+        val updated = _state.value.settings.copy(
+            marketPinnedSymbols = defaultPinnedMarketSymbols,
+            marketSymbols = defaultMarketSymbols,
+        )
+        viewModelScope.launch {
+            app.settings.saveMarketPinnedSymbols(defaultPinnedMarketSymbols)
+            app.settings.saveMarketSymbols(defaultMarketSymbols)
+            _state.update { it.copy(settings = updated) }
+            scheduleMarketRefresh()
+        }
+    }
+
+    fun setMarketRefreshSeconds(seconds: Int) {
+        val value = seconds.coerceIn(10, 300)
+        val updated = _state.value.settings.copy(marketRefreshSeconds = value)
+        viewModelScope.launch {
+            app.settings.saveMarketRefreshSeconds(value)
+            _state.update { it.copy(settings = updated) }
+        }
+    }
+
+    /** 编辑弹窗里的搜索；失败时返回空列表，不打断输入。 */
+    suspend fun searchMarket(query: String): List<MarketSearchResult> =
+        runCatching { app.market.search(query) }.getOrDefault(emptyList())
+
+    private fun updateMarket(block: (MarketUiState) -> MarketUiState) {
+        _state.update { it.copy(market = block(it.market)) }
+    }
+
+    /** 启动时载入评分权重与缓存，顺带完成当天的算法校准。 */
+    private fun loadMarketMind() {
+        viewModelScope.launch {
+            val today = LocalDate.now().toString()
+            val mind = runCatching { app.marketMind.calibrateIfNeeded(today) }.getOrDefault(MarketMind())
+            marketMindMutex.withLock {
+                marketMind = mind
+                val scored = mind.newsCache.map { MarketScorer.score(it, mind.weights) }
+                _state.update {
+                    it.copy(
+                        market = it.market.copy(
+                            mind = mind,
+                            news = scored,
+                            events = if (mind.earningsDate == today) mind.earnings else emptyList(),
+                            eventsDate = if (mind.earningsDate == today) mind.earningsDate else "",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** 行情页进入时拉一次消息和财报日历。 */
+    fun refreshMarketExtras() {
+        calibrateMarketMindIfNeeded()
+        loadMarketNews()
+        loadMarketEvents()
+    }
+
+    /** App 一直开着跨天时，进行情页也能补上当天那次校准。 */
+    private fun calibrateMarketMindIfNeeded() {
+        viewModelScope.launch {
+            marketMindMutex.withLock {
+                val today = LocalDate.now().toString()
+                if (marketMind.lastCalibrated == today ||
+                    marketMind.feedback.none { !it.calibrated }
+                ) {
+                    return@withLock
+                }
+                val updated = runCatching { app.marketMind.calibrateIfNeeded(today) }.getOrDefault(marketMind)
+                marketMind = updated
+                val scored = updated.newsCache.map { MarketScorer.score(it, updated.weights) }
+                _state.update {
+                    it.copy(market = it.market.copy(mind = updated, news = scored))
+                }
+            }
+        }
+    }
+
+    fun loadMarketNews() {
+        if (_state.value.market.newsLoading) return
+        viewModelScope.launch {
+            updateMarket { it.copy(newsLoading = true, newsError = null) }
+            runCatching { app.market.news() }
+                .onSuccess { raw ->
+                    marketMindMutex.withLock {
+                        val current = marketMind
+                        val feedback = current.newsCache.associate { it.id to it.feedback }
+                        val fresh = raw.map {
+                            MarketScorer.score(it.copy(feedback = feedback[it.id] ?: 0), current.weights)
+                        }
+                        val cached = current.newsCache.map { MarketScorer.score(it, current.weights) }
+                        val merged = (fresh + cached).distinctBy { it.id }
+                            .sortedByDescending { news -> news.time }
+                            .take(300)
+                        marketMind = current.copy(newsCache = merged)
+                        app.marketMind.save(marketMind)
+                        _state.update {
+                            it.copy(
+                                market = it.market.copy(
+                                    news = merged,
+                                    newsLoading = false,
+                                    newsError = null,
+                                    mind = marketMind,
+                                ),
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    updateMarket { it.copy(newsLoading = false, newsError = readable(error)) }
+                }
+        }
+    }
+
+    /** 未来 10 天的美股财报：只保留纳指 100 成分股和自选里的美股。 */
+    fun loadMarketEvents(force: Boolean = false) {
+        val current = _state.value.market
+        val today = LocalDate.now().toString()
+        if (!force && current.eventsDate == today) return
+        if (current.eventsLoading) return
+        marketExtrasJob?.cancel()
+        marketExtrasJob = viewModelScope.launch {
+            updateMarket { it.copy(eventsLoading = true, eventsError = null) }
+            runCatching {
+                val ndx = app.market.nasdaq100()
+                val watchUs = allMarketSymbols(
+                    _state.value.settings.marketPinnedSymbols,
+                    _state.value.settings.marketSymbols,
+                ).mapNotNull { symbol ->
+                    val marketNo = symbol.code.substringBefore('.').toIntOrNull()
+                    if (marketNo == 105 || marketNo == 106 || marketNo == 107) {
+                        symbol.code.substringAfter('.', "")
+                    } else {
+                        null
+                    }
+                }
+                coroutineScope {
+                    (0..9).map { offset ->
+                        val date = LocalDate.now().plusDays(offset.toLong()).toString()
+                        async { runCatching { app.market.earnings(date) }.getOrDefault(emptyList()) }
+                    }.awaitAll()
+                }.flatten()
+                    .filter { event -> event.symbol in ndx || event.symbol in watchUs }
+                    .distinctBy { it.id }
+                    .sortedBy { it.date }
+            }.onSuccess { events ->
+                marketMindMutex.withLock {
+                    marketMind = marketMind.copy(earningsDate = today, earnings = events)
+                    app.marketMind.save(marketMind)
+                    _state.update {
+                        it.copy(
+                            market = it.market.copy(
+                                events = events,
+                                eventsDate = today,
+                                eventsLoading = false,
+                                eventsError = null,
+                                mind = marketMind,
+                            ),
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                updateMarket { it.copy(eventsLoading = false, eventsError = readable(error)) }
+            }
+        }
+    }
+
+    /** 个股详情的历史日 K：同一会话内缓存，切换标的时清掉上一只的 AI 结果。 */
+    fun loadMarketBars(symbolId: String, force: Boolean = false) {
+        val settings = _state.value.settings
+        val symbol = findMarketSymbol(settings.marketPinnedSymbols, settings.marketSymbols, symbolId)
+            ?: return
+        val cached = marketBarsCache[symbolId]
+        if (!force && cached != null) {
+            _state.update {
+                it.copy(
+                    market = it.market.copy(
+                        bars = cached,
+                        barsSymbol = symbolId,
+                        barsLoading = false,
+                        barsError = null,
+                        aiText = if (it.market.aiSymbol == symbolId) it.market.aiText else null,
+                        aiError = if (it.market.aiSymbol == symbolId) it.market.aiError else null,
+                    ),
+                )
+            }
+            return
+        }
+        if (_state.value.market.barsLoading && _state.value.market.barsSymbol == symbolId) return
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    market = it.market.copy(
+                        barsSymbol = symbolId,
+                        barsLoading = true,
+                        barsError = null,
+                        aiText = if (it.market.aiSymbol == symbolId) it.market.aiText else null,
+                        aiError = if (it.market.aiSymbol == symbolId) it.market.aiError else null,
+                    ),
+                )
+            }
+            runCatching { app.market.dailyBars(symbol, 365) }
+                .onSuccess { bars ->
+                    marketBarsCache[symbolId] = bars
+                    _state.update {
+                        it.copy(market = it.market.copy(bars = bars, barsLoading = false, barsError = null))
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(market = it.market.copy(barsLoading = false, barsError = readable(error))) }
+                }
+        }
+    }
+
+    /** 分时数据：同一会话缓存，详情页和长按预览共用。 */
+    fun loadIntraday(symbolId: String, force: Boolean = false) {
+        val settings = _state.value.settings
+        val symbol = findMarketSymbol(settings.marketPinnedSymbols, settings.marketSymbols, symbolId)
+            ?: return
+        val cached = marketIntradayCache[symbolId]
+        if (!force && cached != null) {
+            updateMarket {
+                it.copy(
+                    intraday = cached,
+                    intradaySymbol = symbolId,
+                    intradayLoading = false,
+                    intradayError = null,
+                )
+            }
+            return
+        }
+        if (_state.value.market.intradayLoading && _state.value.market.intradaySymbol == symbolId) return
+        viewModelScope.launch {
+            updateMarket { it.copy(intradaySymbol = symbolId, intradayLoading = true, intradayError = null) }
+            runCatching { app.market.intraday(symbol) }
+                .onSuccess { series ->
+                    marketIntradayCache[symbolId] = series
+                    if (_state.value.market.intradaySymbol == symbolId) {
+                        updateMarket {
+                            it.copy(intraday = series, intradayLoading = false, intradayError = null)
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    if (_state.value.market.intradaySymbol == symbolId) {
+                        updateMarket { it.copy(intradayLoading = false, intradayError = readable(error)) }
+                    }
+                }
+        }
+    }
+
+    /** 长按行情卡片：快速预览分时。 */
+    fun openMarketPreview(symbolId: String) {
+        updateMarket { it.copy(previewSymbol = symbolId) }
+        loadIntraday(symbolId)
+    }
+
+    fun closeMarketPreview() {
+        updateMarket { it.copy(previewSymbol = null) }
+    }
+
+    /** 详情页的 AI 分析：行情、日历和本地评分消息一起交给当前配置的服务商。 */
+    fun analyzeMarket(symbolId: String) {
+        val settings = _state.value.settings
+        val symbol = findMarketSymbol(settings.marketPinnedSymbols, settings.marketSymbols, symbolId)
+            ?: return
+        if (_state.value.market.aiLoading) return
+        val provider = settings.aiProviders.firstOrNull { it.id == settings.aiSelectedId }
+            ?: settings.aiProviders.firstOrNull()
+        val problem = when {
+            provider == null -> "还没有可用的 AI 服务商，去 设置 → 小砂糖 添加。"
+            provider.baseUrl.isBlank() || provider.model.isBlank() -> "「${provider.name}」还没有填写 Base URL 或模型。"
+            provider.apiKey.isBlank() && provider.requiresKey -> "「${provider.name}」还没有填写 API Key。"
+            else -> null
+        }
+        if (problem != null) {
+            updateMarket { it.copy(aiSymbol = symbolId, aiError = problem) }
+            return
+        }
+        viewModelScope.launch {
+            updateMarket { it.copy(aiSymbol = symbolId, aiLoading = true, aiText = null, aiError = null) }
+            val bars = marketBarsCache[symbolId]
+                ?: runCatching { app.market.dailyBars(symbol, 60) }.getOrDefault(emptyList())
+            if (bars.isNotEmpty()) marketBarsCache[symbolId] = bars
+            val quote = _state.value.marketQuotes.firstOrNull { it.id == symbolId }
+            val suffix = symbol.code.substringAfter('.', "")
+            val events = _state.value.market.events.filter { it.symbol == suffix }
+            val related = _state.value.market.news
+                .filter { news -> news.stocks.any { it == symbol.code } || news.title.contains(symbol.label) }
+                .take(6)
+            val brief = buildString {
+                appendLine("标的：${symbol.label}（${symbol.code}）")
+                appendLine(
+                    "现价：${quote?.price ?: "--"}${symbol.unit}，" +
+                        "涨跌 ${quote?.changePercent?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "--"}",
+                )
+                if (quote?.afterPrice != null) {
+                    appendLine(
+                        "${quote.afterLabel}：${quote.afterPrice}${symbol.unit}，" +
+                            "涨跌 ${quote.afterChangePercent?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "--"}",
+                    )
+                }
+                appendLine("近 20 个交易日（日期 收盘 涨跌幅）：")
+                bars.takeLast(20).forEach { bar ->
+                    appendLine("${bar.date} ${bar.close} ${String.format(Locale.US, "%+.2f%%", bar.changePercent)}")
+                }
+                if (events.isNotEmpty()) {
+                    appendLine("未来财报：")
+                    events.forEach { appendLine("${it.date} ${it.detail}") }
+                }
+                if (related.isNotEmpty()) {
+                    appendLine("相关消息（分数 0-100）：")
+                    related.forEach { appendLine("[${it.score}] ${it.title}（${it.time}）") }
+                }
+            }.take(6000)
+            runCatching { app.aiAgent.analyzeStock(provider!!, brief) }
+                .onSuccess { text -> updateMarket { it.copy(aiText = text, aiLoading = false, aiError = null) } }
+                .onFailure { error -> updateMarket { it.copy(aiLoading = false, aiError = readable(error)) } }
+        }
+    }
+
+    /** 记录一条消息的评价；不立刻改权重，等当天第一次启动时统一校准。 */
+    fun rateMarketNews(newsId: String, useful: Boolean) {
+        viewModelScope.launch {
+            marketMindMutex.withLock {
+                val news = marketMind.newsCache.firstOrNull { it.id == newsId }
+                    ?: _state.value.market.news.firstOrNull { it.id == newsId }
+                    ?: return@withLock
+                val record = NewsFeedback(
+                    newsId = newsId,
+                    title = news.title,
+                    date = news.date,
+                    useful = useful,
+                    features = MarketScorer.features(news),
+                )
+                val flag = if (useful) 1 else -1
+                marketMind = marketMind.copy(
+                    feedback = (marketMind.feedback.filterNot { it.newsId == newsId } + record).takeLast(200),
+                    newsCache = marketMind.newsCache.map { if (it.id == newsId) it.copy(feedback = flag) else it },
+                )
+                app.marketMind.save(marketMind)
+                _state.update {
+                    it.copy(
+                        market = it.market.copy(
+                            mind = marketMind,
+                            news = it.market.news.map { item ->
+                                if (item.id == newsId) item.copy(feedback = flag) else item
+                            },
+                        ),
+                    )
+                }
+            }
         }
     }
 
@@ -518,7 +1150,8 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                _state.update { it.copy(loadingBills = false, message = readable(error)) }
+                // 自动刷新失败不弹提示：脱机模式卡片已经说明了原因，弹一条英文异常只会打扰
+                _state.update { it.copy(loadingBills = false) }
             }
         }
     }
@@ -2063,6 +2696,60 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
 
     fun deleteCalendarEntry(id: Long) {
         viewModelScope.launch { app.calendar.delete(listOf(id)) }
+    }
+
+    fun setCalendarEntryDone(id: Long, done: Boolean) {
+        viewModelScope.launch {
+            val entry = app.calendar.find(id) ?: return@launch
+            if (entry.done == done) return@launch
+            app.calendar.upsert(entry.copy(done = done))
+        }
+    }
+
+    /** 日历页只读展示某个月的账本流水；没配账本地址时只记一句提示，不重试。 */
+    fun loadCalendarBills(month: String) {
+        val settings = _state.value.settings
+        if (settings.billUrl.isBlank()) {
+            _state.update {
+                it.copy(
+                    calendarBillsMonth = month,
+                    calendarTransactions = emptyList(),
+                    calendarBillsLoading = false,
+                    calendarBillsError = null,
+                )
+            }
+            return
+        }
+        _state.update {
+            it.copy(
+                calendarBillsMonth = month,
+                calendarBillsLoading = true,
+                calendarBillsError = null,
+            )
+        }
+        viewModelScope.launch {
+            runCatching { loadMonthTransactions(settings, month) }
+                .onSuccess { page ->
+                    _state.update { current ->
+                        if (current.calendarBillsMonth != month) current
+                        else current.copy(
+                            calendarTransactions = page.items,
+                            calendarBillsLoading = false,
+                            calendarBillsError = null,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { current ->
+                        if (current.calendarBillsMonth != month) current
+                        else current.copy(
+                            calendarTransactions = emptyList(),
+                            calendarBillsLoading = false,
+                            calendarBillsError = readable(error),
+                        )
+                    }
+                }
+        }
     }
 
     fun clearMessage() {

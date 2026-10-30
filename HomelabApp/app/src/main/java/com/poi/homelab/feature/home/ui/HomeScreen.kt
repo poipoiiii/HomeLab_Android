@@ -21,28 +21,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -62,9 +56,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.poi.homelab.core.ui.components.CreamCard
 import com.poi.homelab.core.ui.components.DarkCard
 import com.poi.homelab.core.ui.components.DarkStat
@@ -77,15 +75,19 @@ import com.poi.homelab.core.ui.components.SecondaryButton
 import com.poi.homelab.core.ui.components.StatusDot
 import com.poi.homelab.core.ui.components.Tag
 import com.poi.homelab.core.ui.components.ThinDivider
+import com.poi.homelab.core.ui.theme.CardSurfaceAlpha
+import com.poi.homelab.core.ui.theme.DarkSurface
 import com.poi.homelab.core.ui.theme.OnDarkSoft
 import com.poi.homelab.core.ui.theme.Warning
 import com.poi.homelab.core.util.Reachability
 import com.poi.homelab.core.util.ReachabilityState
+import com.poi.homelab.core.util.Tailscale
 import com.poi.homelab.core.util.money
 import com.poi.homelab.core.util.todayLabel
 import com.poi.homelab.feature.automation.SplashSkip
 import com.poi.homelab.feature.bills.MonthStats
 import com.poi.homelab.feature.bills.ui.TransactionRow
+import com.poi.homelab.feature.calendar.CalendarEntry
 import com.poi.homelab.feature.homarr.resolveHomarrUrl
 import com.poi.homelab.feature.homarr.stringValue
 import com.poi.homelab.feature.homarr.ui.HomarrBoardGrid
@@ -94,14 +96,18 @@ import com.poi.homelab.feature.homarr.WeatherQuery
 import com.poi.homelab.feature.homarr.WeatherSnapshot
 import com.poi.homelab.feature.home.TodoItem
 import com.poi.homelab.feature.home.ui.ChecklistItem
-import com.poi.homelab.feature.home.ui.DailyChecklistCard
 import com.poi.homelab.feature.home.ui.QuickEntryPager
 import com.poi.homelab.feature.home.ui.StackCard
-import com.poi.homelab.feature.home.ui.TodoEditorSheet
 import com.poi.homelab.feature.lab.HealthSnapshot
+import com.poi.homelab.feature.market.MarketSearchResult
+import com.poi.homelab.feature.market.MarketSymbol
+import com.poi.homelab.feature.market.ui.MarketCard
+import com.poi.homelab.feature.market.ui.MarketEditorSheet
 import com.poi.homelab.navigation.UiState
 import com.poi.homelab.R
 import java.net.URI
+import java.time.LocalDate
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,19 +126,28 @@ fun HomeScreen(
     onOpenFiles: () -> Unit = {},
     onOpenCalendar: () -> Unit = {},
     onLoadDeviceUsage: () -> Unit = {},
+    onOpenMenu: () -> Unit = {},
+    onRefreshMarket: () -> Unit = {},
+    onSearchMarket: suspend (String) -> List<MarketSearchResult> = { emptyList() },
+    onSaveMarketSymbols: (List<MarketSymbol>, Boolean) -> Unit = { _, _ -> },
+    onSaveMarketPinnedSymbols: (List<MarketSymbol>, Boolean) -> Unit = { _, _ -> },
+    onResetMarketSymbols: () -> Unit = {},
+    onOpenMarketSymbol: (String) -> Unit = {},
+    onPreviewMarketSymbol: (String) -> Unit = {},
 ) {
     val settings = state.settings
     val needsSetup = settings.labUrl.isBlank() && settings.billUrl.isBlank()
-    // 探测已配置地址失败时进「离家模式」，具体是没连 VPN 还是主机休眠由 ReachabilityProbe 判定
+    // 探测已配置地址失败时进「脱机模式」，具体是没连 VPN 还是主机休眠由 ReachabilityProbe 判定
     val offline = state.labReachability?.online == false
     val todoItems = state.todos.map { ChecklistItem(it.id, it.label) }
-    var todoEditorOpen by rememberSaveable { mutableStateOf(false) }
     var powerOpen by rememberSaveable { mutableStateOf(false) }
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val doneCount = todoItems.count { it.id in state.checkedToday }
     var quickSheetOpen by rememberSaveable { mutableStateOf(false) }
     var moreExpanded by rememberSaveable { mutableStateOf(false) }
+    var marketEditOpen by rememberSaveable { mutableStateOf(false) }
+    var awaySheetOpen by rememberSaveable { mutableStateOf(false) }
+    var marketExpanded by rememberSaveable { mutableStateOf(false) }
     val quickSheetState = rememberModalBottomSheetState()
     val closeSheetThen: (() -> Unit) -> Unit = { action ->
         scope.launch {
@@ -168,55 +183,20 @@ fun HomeScreen(
         if (moreExpanded) onLoadDeviceUsage()
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = true,
-        drawerContent = {
-            // 待办收进左侧抽屉：左缘右滑或点标题栏的「清单」拉出
-            ModalDrawerSheet(
-                modifier = Modifier.width(336.dp),
-                drawerContainerColor = MaterialTheme.colorScheme.surface,
-                drawerContentColor = MaterialTheme.colorScheme.onSurface,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "清单",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
-                        )
-                        InlineAction(
-                            text = "收起",
-                            onClick = { scope.launch { drawerState.close() } },
-                        )
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    DailyChecklistCard(
-                        items = todoItems,
-                        checked = state.checkedToday,
-                        onToggle = onToggleChecklist,
-                        onEdit = { todoEditorOpen = true },
-                    )
-                    Text(
-                        text = "点左侧的「清单」标签，或把它往右拖，就能随时拉出这份清单",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 12.dp, start = 4.dp),
-                    )
-                }
+    // 行情默认折叠，折叠时不刷新；展开后按设置间隔轮询，退到后台就停
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val inspection = LocalInspectionMode.current
+    val marketRefreshMs = settings.marketRefreshSeconds.coerceIn(10, 300) * 1000L
+    LaunchedEffect(lifecycleOwner, inspection, marketRefreshMs, marketExpanded) {
+        if (inspection || !marketExpanded) return@LaunchedEffect
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                onRefreshMarket()
+                delay(marketRefreshMs)
             }
-        },
-    ) {
+        }
+    }
+
     // 下拉即刷新：不再需要标题栏的「刷新」按钮
     PullToRefreshBox(
         isRefreshing = state.loadingBoard || state.loadingBills ||
@@ -230,22 +210,69 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item {
-                HomeHeader(health = state.health)
+                HomeHeader(
+                    health = state.health,
+                    onOpenMenu = onOpenMenu,
+                    offline = offline,
+                    onOpenStatus = { awaySheetOpen = true },
+                )
             }
 
-            if (offline) {
-                item {
-                    AwayModeCard(
-                        state = state,
-                        reachability = state.labReachability,
-                        onRetry = onRefresh,
-                        onOpenSettings = onOpenSettings,
-                    )
+            // 行情置顶：默认折叠，折叠时不轮询刷新
+            item {
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha))
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                            .clickable { marketExpanded = !marketExpanded }
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "行情",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = if (marketExpanded) "收起" else "展开",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    if (marketExpanded) {
+                        Spacer(Modifier.height(10.dp))
+                        MarketCard(
+                            quotes = state.marketQuotes,
+                            loading = state.marketLoading,
+                            error = state.marketError,
+                            updatedAt = state.marketUpdatedAt,
+                            onEdit = { marketEditOpen = true },
+                            onRetry = onRefreshMarket,
+                            onOpenSymbol = onOpenMarketSymbol,
+                            onPreviewSymbol = onPreviewMarketSymbol,
+                            pinnedSymbols = settings.marketPinnedSymbols,
+                        )
+                    }
                 }
-                item { AdOffCard() }
             }
 
-            if (!offline && needsSetup) {
+            // 账本与日程并排：两块都是本机数据，脱机也能看
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (!offline && settings.billUrl.isNotBlank() && settings.showLedgerOnHome) {
+                        LedgerTile(state, onOpenBills, Modifier.weight(1f))
+                    }
+                    ScheduleTile(state.calendarEntries, onOpenCalendar, Modifier.weight(1f))
+                }
+            }
+
+            if (needsSetup && !offline) {
                 item {
                     CreamCard {
                         Text("先连上你的实验室", style = MaterialTheme.typography.titleLarge)
@@ -293,7 +320,7 @@ fun HomeScreen(
                         else -> CreamCard { EmptyState("看板没有返回数据") }
                     }
                 }
-            } else if (!offline) {
+            } else {
                 item {
                     QuickEntryPager(
                         cards = listOf(
@@ -312,17 +339,7 @@ fun HomeScreen(
                 }
             }
 
-            if (!offline && settings.billUrl.isNotBlank() && settings.showLedgerOnHome) {
-                item {
-                    LedgerCard(
-                        state = state,
-                        onOpenBills = onOpenBills,
-                        onRefresh = onRefresh,
-                    )
-                }
-            }
-
-            if (!offline && settings.showLedgerOnHome) {
+            if (settings.showLedgerOnHome) {
                 val overview = state.overview
                 if (overview != null && overview.recent.isNotEmpty()) {
                     item {
@@ -342,37 +359,42 @@ fun HomeScreen(
                 }
             }
 
-            if (!offline) {
-                val pendingBalances = state.overview?.pendingBalanceCandidates ?: 0
-                item {
-                    SectionHeader(
-                        title = "更多",
-                        subtitle = if (moreExpanded) {
-                            null
-                        } else {
-                            buildString {
-                                if (pendingBalances > 0) append("$pendingBalances 条余额待确认 · ")
-                                append("净资产 · 日程 · 主机 · 天气 · 设备")
+            // 脱机模式也保留这块：净资产读上次缓存，日程/照片同步/设备排行都是本机数据
+            val pendingBalances = if (offline) 0 else state.overview?.pendingBalanceCandidates ?: 0
+            item {
+                SectionHeader(
+                    title = "更多",
+                    subtitle = if (moreExpanded) {
+                        null
+                    } else {
+                        buildString {
+                            if (pendingBalances > 0) append("$pendingBalances 条余额待确认 · ")
+                            if (offline) {
+                                append("离线可用 · 余额 · 照片 · 设备")
+                            } else {
+                                append("净资产 · 主机 · 天气 · 设备")
                             }
-                        },
-                        action = {
-                            InlineAction(
-                                text = if (moreExpanded) "收起" else "展开",
-                                onClick = { moreExpanded = !moreExpanded },
-                            )
-                        },
-                    )
-                }
-                if (moreExpanded) {
-                    state.overview?.let { overview ->
-                        item { NetWorthCard(overview = overview, onOpenBills = onOpenBills) }
-                    }
+                        }
+                    },
+                    action = {
+                        InlineAction(
+                            text = if (moreExpanded) "收起" else "展开",
+                            onClick = { moreExpanded = !moreExpanded },
+                        )
+                    },
+                )
+            }
+            if (moreExpanded) {
+                state.overview?.let { overview ->
                     item {
-                        UpcomingCalendarCard(
-                            entries = state.calendarEntries,
-                            onOpenCalendar = onOpenCalendar,
+                        NetWorthCard(
+                            overview = overview,
+                            onOpenBills = onOpenBills,
+                            showPending = !offline,
                         )
                     }
+                }
+                if (!offline) {
                     state.health?.let { health ->
                         item { HostHealthCard(health = health, onOpenServices = onOpenServices) }
                     }
@@ -387,21 +409,21 @@ fun HomeScreen(
                             )
                         }
                     }
-                    if (settings.photoAutoSync) {
-                        item { PhotoSyncCard(settings = settings, onOpenSettings = onOpenSettings) }
-                    }
-                    item {
-                        DeviceUsageCard(
-                            loading = state.loadingUsage,
-                            hasAccess = state.usageAccess,
-                            usageRows = state.usageRows,
-                            storageRows = state.storageRows,
-                            onOpenSettings = onOpenSettings,
-                        )
-                    }
                 }
-                item { AdOffCard() }
+                if (settings.photoAutoSync) {
+                    item { PhotoSyncCard(settings = settings, onOpenSettings = onOpenSettings) }
+                }
+                item {
+                    DeviceUsageCard(
+                        loading = state.loadingUsage,
+                        hasAccess = state.usageAccess,
+                        usageRows = state.usageRows,
+                        storageRows = state.storageRows,
+                        onOpenSettings = onOpenSettings,
+                    )
+                }
             }
+            item { AdOffCard() }
         }
         if (powerUrl != null) {
             AnimatedVisibility(
@@ -443,12 +465,29 @@ fun HomeScreen(
                     .padding(end = 20.dp, bottom = 18.dp),
             )
         }
-        if (todoEditorOpen) {
-            TodoEditorSheet(
-                items = state.todos,
-                onDismiss = { todoEditorOpen = false },
-                onSave = onSaveTodos,
-            )
+        if (awaySheetOpen) {
+            val awaySheetState = rememberModalBottomSheetState()
+            ModalBottomSheet(
+                onDismissRequest = { awaySheetOpen = false },
+                sheetState = awaySheetState,
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
+                ) {
+                    AwayModeCard(
+                        state = state,
+                        reachability = state.labReachability,
+                        onRetry = onRefresh,
+                        onOpenSettings = {
+                            awaySheetOpen = false
+                            onOpenSettings()
+                        },
+                    )
+                }
+            }
         }
         if (quickSheetOpen) {
             ModalBottomSheet(
@@ -464,7 +503,7 @@ fun HomeScreen(
                     QuickActionRow(
                         title = "今天清单",
                         subtitle = "完成 $doneCount/${todoItems.size} 项",
-                        onClick = { closeSheetThen { scope.launch { drawerState.open() } } },
+                        onClick = { closeSheetThen(onOpenMenu) },
                     )
                     ThinDivider()
                     QuickActionRow(
@@ -483,7 +522,19 @@ fun HomeScreen(
                 }
             }
         }
-    }
+        if (marketEditOpen) {
+            MarketEditorSheet(
+                symbols = settings.marketSymbols,
+                pinnedSymbols = settings.marketPinnedSymbols,
+                onAdd = { symbol -> onSaveMarketSymbols(settings.marketSymbols + symbol, true) },
+                onRemove = { symbol -> onSaveMarketSymbols(settings.marketSymbols - symbol, true) },
+                onSaveSymbols = onSaveMarketSymbols,
+                onSavePinned = onSaveMarketPinnedSymbols,
+                onReset = onResetMarketSymbols,
+                onSearch = onSearchMarket,
+                onDismiss = { marketEditOpen = false },
+            )
+        }
     }
 }
 
@@ -583,19 +634,25 @@ private fun QuickActionRow(
 }
 
 @Composable
-private fun HomeHeader(health: HealthSnapshot?) {
+private fun HomeHeader(
+    health: HealthSnapshot?,
+    onOpenMenu: () -> Unit,
+    offline: Boolean,
+    onOpenStatus: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Image(
             painter = painterResource(R.drawable.app_avatar),
-            contentDescription = "应用头像",
+            contentDescription = "打开导航",
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .size(44.dp)
                 .clip(CircleShape)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                .clickable(onClick = onOpenMenu),
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -619,11 +676,29 @@ private fun HomeHeader(health: HealthSnapshot?) {
                 }
             }
         }
+        if (offline) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, Warning.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenStatus)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatusDot(Warning, 7)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "脱机",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Warning,
+                )
+            }
+        }
     }
 }
 
 /**
- * 离家模式：地址探测不通时顶掉看板和账本。
+ * 脱机详情：点右上角「脱机」标签弹出的底部卡片。
  * 虚线框当作门口那块地址牌，写清是没连 VPN、主机休眠还是服务没起。
  */
 @Composable
@@ -640,6 +715,19 @@ private fun AwayModeCard(
         ?: ""
     val host = target.substringAfter("://").substringBefore('/').substringBefore('?')
     val done = state.todos.count { it.id in state.checkedToday }
+    val context = LocalContext.current
+    val tailscaleInstalled = remember { Tailscale.isInstalled(context) }
+    var connecting by remember { mutableStateOf(false) }
+    LaunchedEffect(connecting) {
+        if (!connecting) return@LaunchedEffect
+        delay(3500)
+        onRetry()
+        connecting = false
+    }
+    // VPN 通道还在、只是主机没响应时，按钮改成断开，方便换网络或手动排查
+    val vpnConnected = reachability?.state == ReachabilityState.HostAsleep ||
+        reachability?.state == ReachabilityState.ServiceDown ||
+        reachability?.state == ReachabilityState.Failed
     val cause = awayCause(reachability)
 
     Column(
@@ -657,7 +745,7 @@ private fun AwayModeCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             StatusDot(Warning, 9)
             Spacer(Modifier.width(8.dp))
-            Text("离家模式", style = MaterialTheme.typography.headlineSmall)
+            Text("脱机模式", style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.weight(1f))
             Tag(cause.tag, Warning)
         }
@@ -690,64 +778,78 @@ private fun AwayModeCard(
             modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            PrimaryButton("重试", onRetry, Modifier.weight(1f))
-            SecondaryButton("检查地址", onOpenSettings, Modifier.weight(1f))
+            PrimaryButton(
+                text = when {
+                    connecting -> "正在处理…"
+                    vpnConnected -> "断开 Tailscale"
+                    else -> "连接 Tailscale"
+                },
+                onClick = {
+                    // 优先发广播直接连/断隧道；被系统拒绝（接收器未导出）才退回打开 Tailscale
+                    val sent = if (vpnConnected) {
+                        Tailscale.disconnect(context)
+                    } else {
+                        Tailscale.connect(context)
+                    }
+                    if (!sent) Tailscale.openApp(context)
+                    connecting = true
+                },
+                modifier = Modifier.weight(1f),
+                enabled = tailscaleInstalled && !connecting,
+                loading = connecting,
+            )
+            SecondaryButton("重试", onRetry, Modifier.weight(1f))
         }
-        ThinDivider(Modifier.padding(top = 18.dp, bottom = 14.dp))
-        Text("离线还能用", style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = "清单：完成 $done/${state.todos.size} 项",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        val overview = state.overview
-        Text(
-            text = if (overview != null) {
-                "账本：本月支出 ${money(overview.monthStats.expense)}（上次读取）"
-            } else {
-                "账本：要联网才能刷新"
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        if (!tailscaleInstalled) {
+            Text(
+                text = "没找到 Tailscale（com.tailscale.ipn），只能手动连接。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            InlineAction("检查地址", onOpenSettings)
+        }
     }
 }
 
 private data class AwayCause(val tag: String, val headline: String, val hint: String)
 
-/** 把探测结果翻成用户能判断的一句话：没网、VPN 没连、主机睡了、服务没起。 */
+/** 把探测结果翻成可判断的说明：无网络、VPN 未连接、主机无响应、服务未启动。 */
 private fun awayCause(reachability: Reachability?): AwayCause = when (reachability?.state) {
     ReachabilityState.NoNetwork -> AwayCause(
-        tag = "手机没网",
-        headline = "先联网",
-        hint = "手机现在没有可用网络，Wi-Fi 和流量都不通。连上之后再重试。",
+        tag = "无网络连接",
+        headline = "当前没有可用的网络",
+        hint = "Wi-Fi 与移动数据均不可用，恢复网络后重试。",
     )
     ReachabilityState.VpnOff -> AwayCause(
         tag = "VPN 未连接",
-        headline = "VPN 没连上",
-        hint = "手机到不了家里的内网地址。先打开 Tailscale，再点重试。",
+        headline = "VPN 未连接",
+        hint = "当前没有可用的 VPN 连接，无法访问内网地址。请先连接 Tailscale 后重试。",
     )
     ReachabilityState.HostAsleep -> AwayCause(
-        tag = "主机没应答",
-        headline = "VPN 连着，家里那台没有响应",
-        hint = "4 秒内没等到任何回应。多半是家里电脑在休眠，或它上面的 Tailscale 节点离线。",
+        tag = "主机未响应",
+        headline = "VPN 已连接，主机未响应",
+        hint = "请求在 4 秒内没有返回。可能是家中主机处于休眠状态，或其 Tailscale 节点离线。",
     )
     ReachabilityState.ServiceDown -> AwayCause(
-        tag = "服务没起",
-        headline = "主机在线，服务没响应",
-        hint = "端口拒绝连接，主机是醒着的，检查容器或反向代理是不是停了。",
+        tag = "服务未启动",
+        headline = "主机在线，服务未响应",
+        hint = "端口拒绝连接，主机在线但服务未启动，请检查容器或反向代理状态。",
     )
     ReachabilityState.Failed -> AwayCause(
         tag = "连接异常",
-        headline = "能连到主机，但握手失败",
-        hint = "检查地址、端口和证书配置。",
+        headline = "已连接到主机，但握手失败",
+        hint = "请检查地址、端口与证书配置。",
     )
     else -> AwayCause(
         tag = "待判定",
-        headline = "还没探到家里",
-        hint = "4 秒没等到响应，重试一次看看。",
+        headline = "尚未探测到主机",
+        hint = "4 秒内未收到响应，请重试。",
     )
 }
 
@@ -784,61 +886,133 @@ private fun AdOffCard() {
             )
         }
         Text(
-            text = "覆盖 ${SplashSkip.packages(context).size} 个应用，可以在设置里加。营销通知和广告包是在电脑上那个工具关的，这里只负责开屏。",
-            style = MaterialTheme.typography.bodySmall,
+            text = "覆盖 ${SplashSkip.packages(context).size} 个应用 · 设置里可加",
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
+/** 本月账本：并排小卡，只留支出大数字 + 收入/结余一行。 */
+@Composable
+private fun LedgerTile(
+    state: UiState,
+    onOpenBills: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val overview = state.overview
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(18.dp))
+            .background(DarkSurface)
+            .border(1.dp, Color(0xFF3A3733), RoundedCornerShape(18.dp))
+            .clickable(onClick = onOpenBills)
+            .padding(16.dp),
+    ) {
+        Text("本月账本", style = MaterialTheme.typography.labelMedium, color = OnDarkSoft)
+        when {
+            overview != null -> {
+                Text(
+                    text = money(overview.monthStats.expense),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color(0xFFE7A48C),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                Text(
+                    text = "支出 · 收 ${money(overview.monthStats.income)} · 结 ${money(overview.monthStats.net)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnDarkSoft,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            state.loadingBills -> Text(
+                text = "正在读取…",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnDarkSoft,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            else -> Text(
+                text = "还没有读到账本",
+                style = MaterialTheme.typography.bodySmall,
+                color = OnDarkSoft,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = "明细",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(top = 10.dp),
         )
     }
 }
 
-/** 本月账本：只保留支出 / 收入 / 结余三个数字。 */
+/** 日程：并排小卡，只显示最近两条。 */
 @Composable
-private fun LedgerCard(
-    state: UiState,
-    onOpenBills: () -> Unit,
-    onRefresh: () -> Unit,
+private fun ScheduleTile(
+    entries: List<CalendarEntry>,
+    onOpenCalendar: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val overview = state.overview
-    DarkCard {
-        when {
-            overview != null -> Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                DarkStat(
-                    "本月支出",
-                    money(overview.monthStats.expense),
-                    Modifier.weight(1f),
-                    Color(0xFFE7A48C),
-                )
-                DarkStat(
-                    "本月收入",
-                    money(overview.monthStats.income),
-                    Modifier.weight(1f),
-                    Color(0xFF8FD9A3),
-                )
-                DarkStat("结余", money(overview.monthStats.net), Modifier.weight(1f))
-            }
-            state.loadingBills -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "正在读取账本…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OnDarkSoft,
-                    modifier = Modifier.weight(1f),
-                )
-                InlineAction("明细", onOpenBills)
-            }
-            else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "账本没有返回数据",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = OnDarkSoft,
-                    modifier = Modifier.weight(1f),
-                )
-                InlineAction("重试", onRefresh)
+    val today = LocalDate.now()
+    val upcoming = remember(entries, today) {
+        val start = today.toString()
+        val end = today.plusDays(7).toString()
+        entries.filter { it.date in start..end }.take(2)
+    }
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+            .clickable(onClick = onOpenCalendar)
+            .padding(16.dp),
+    ) {
+        Text(
+            text = "日程",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (upcoming.isEmpty()) {
+            Text(
+                text = "未来 7 天没有安排",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        } else {
+            upcoming.forEachIndexed { index, entry ->
+                Column(Modifier.padding(top = if (index == 0) 8.dp else 10.dp)) {
+                    Text(
+                        text = entry.date.takeLast(5).replace('-', '/'),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = entry.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 1.dp),
+                    )
+                }
             }
         }
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = "打开日历",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 10.dp),
+        )
     }
 }
 

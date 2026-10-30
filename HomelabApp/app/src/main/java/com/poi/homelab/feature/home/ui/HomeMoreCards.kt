@@ -25,6 +25,7 @@ import com.poi.homelab.core.ui.components.LoadingRow
 import com.poi.homelab.core.ui.components.StatBlock
 import com.poi.homelab.core.ui.components.Tag
 import com.poi.homelab.core.ui.components.ThinDivider
+import com.poi.homelab.core.ui.theme.Amber
 import com.poi.homelab.core.ui.theme.Coral
 import com.poi.homelab.core.ui.theme.Danger
 import com.poi.homelab.core.ui.theme.OnDark
@@ -36,6 +37,8 @@ import com.poi.homelab.core.util.balanceSourceLabel
 import com.poi.homelab.core.util.money
 import com.poi.homelab.core.util.shortIsoTimestamp
 import com.poi.homelab.feature.bills.BillOverview
+import com.poi.homelab.feature.calendar.CALENDAR_ANNIVERSARY
+import com.poi.homelab.feature.calendar.CALENDAR_TODO
 import com.poi.homelab.feature.calendar.CALENDAR_TRAVEL
 import com.poi.homelab.feature.calendar.CalendarEntry
 import com.poi.homelab.feature.lab.DiskSection
@@ -48,7 +51,11 @@ import kotlin.math.roundToInt
 
 /** 首页「更多」里的净资产卡：净资产 + 各账户余额，数据来自账本 /api/overview。 */
 @Composable
-internal fun NetWorthCard(overview: BillOverview, onOpenBills: () -> Unit) {
+internal fun NetWorthCard(
+    overview: BillOverview,
+    onOpenBills: () -> Unit,
+    showPending: Boolean = true,
+) {
     DarkCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             DarkStat("净资产", money(overview.netWorth), Modifier.weight(1f))
@@ -98,7 +105,7 @@ internal fun NetWorthCard(overview: BillOverview, onOpenBills: () -> Unit) {
                 )
             }
         }
-        if (overview.pendingBalanceCandidates > 0) {
+        if (showPending && overview.pendingBalanceCandidates > 0) {
             ThinDivider(Modifier.padding(vertical = 12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -168,10 +175,11 @@ internal fun UpcomingCalendarCard(entries: List<CalendarEntry>, onOpenCalendar: 
                         }
                     }
                     Spacer(Modifier.width(8.dp))
-                    if (entry.type == CALENDAR_TRAVEL) {
-                        Tag("出行", Teal)
-                    } else {
-                        Tag("重要", Coral)
+                    when (entry.type) {
+                        CALENDAR_TRAVEL -> Tag("出行", Teal)
+                        CALENDAR_ANNIVERSARY -> Tag("纪念日", Amber)
+                        CALENDAR_TODO -> Tag("待办", Success)
+                        else -> Tag("重要", Coral)
                     }
                 }
             }

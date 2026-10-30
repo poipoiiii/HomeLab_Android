@@ -38,6 +38,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -46,23 +48,27 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -96,6 +102,7 @@ import com.poi.homelab.core.ui.components.ThinDivider
 import com.poi.homelab.core.ui.InAppBrowserScreen
 import com.poi.homelab.core.ui.theme.CardSurfaceAlpha
 import com.poi.homelab.core.ui.theme.Danger
+import com.poi.homelab.core.util.todayLabel
 import com.poi.homelab.feature.ai.ui.AiScreen
 import com.poi.homelab.feature.ai.ui.AiSettingsScreen
 import com.poi.homelab.feature.bills.AnalysisResponse
@@ -104,33 +111,33 @@ import com.poi.homelab.feature.bills.ui.BillImportScreen
 import com.poi.homelab.feature.bills.ui.BillsScreen
 import com.poi.homelab.feature.calendar.ui.CalendarScreen
 import com.poi.homelab.feature.files.ui.FileInsightScreen
+import com.poi.homelab.feature.home.ui.ChecklistItem
+import com.poi.homelab.feature.home.ui.DailyChecklistCard
 import com.poi.homelab.feature.home.ui.HomeScreen
+import com.poi.homelab.feature.home.ui.TodoEditorSheet
 import com.poi.homelab.feature.lab.ui.DownloadsScreen
 import com.poi.homelab.feature.lab.ui.ServicesScreen
+import com.poi.homelab.feature.market.ui.MarketIntradaySheet
+import com.poi.homelab.feature.market.ui.MarketScreen
 import com.poi.homelab.feature.settings.ui.SettingsScreen
+import com.poi.homelab.feature.watch.ui.WatchScreen
 import com.poi.homelab.R
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private enum class Tab(
     val label: String,
     @DrawableRes val icon: Int,
 ) {
     Home("总览", R.drawable.ic_home),
+    Market("行情", R.drawable.ic_chart),
     Calendar("日历", R.drawable.ic_calendar),
     Services("服务", R.drawable.ic_server),
     Bills("账单", R.drawable.ic_receipt),
+    Watch("监控", R.drawable.ic_watch),
     Ai("小砂糖", R.drawable.ic_ai),
     Downloads("下载", R.drawable.ic_download),
-    Settings("设置", R.drawable.ic_settings);
-
-    val isPrimary: Boolean
-        get() = this == Home || this == Calendar || this == Ai || this == Settings
+    Settings("设置", R.drawable.ic_settings),
 }
-
-/** 主入口保留总览、日历、AI、设置；其余页面从总览里的入口进入。 */
-private val primaryTabs = listOf(Tab.Home, Tab.Calendar, Tab.Ai, Tab.Settings)
-
-private enum class NavStage { Full, Mini, Hidden }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -138,17 +145,16 @@ fun HomelabApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
     var screenIndex by rememberSaveable { mutableIntStateOf(0) }
-    var navStage by remember { mutableStateOf(NavStage.Full) }
-    var barPulse by remember { mutableIntStateOf(0) }
+    var marketSymbolId by rememberSaveable { mutableStateOf<String?>(null) }
     var aiConfigOpen by rememberSaveable { mutableStateOf(false) }
     var browserUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var billImportOpen by rememberSaveable { mutableStateOf(false) }
     var fileInsightOpen by rememberSaveable { mutableStateOf(false) }
+    var todoEditorOpen by rememberSaveable { mutableStateOf(false) }
     var exitArmed by rememberSaveable { mutableStateOf(false) }
-    val tabCenters = remember { mutableStateMapOf<Tab, Offset>() }
-    var contentBounds by remember { mutableStateOf(Rect.Zero) }
-    var revealOrigin by remember { mutableStateOf(Offset.Zero) }
     val screen = Tab.entries[screenIndex]
 
     LaunchedEffect(state.message) {
@@ -171,24 +177,11 @@ fun HomelabApp(viewModel: MainViewModel) {
         }
     }
 
-    // 主入口菜单：完整条 → 迷你胶囊 → 只剩一根细把手；二级页面保持完整菜单。
-    LaunchedEffect(screen, barPulse) {
-        navStage = NavStage.Full
-        if (screen.isPrimary) {
-            delay(4500)
-            navStage = NavStage.Mini
-            delay(2000)
-            navStage = NavStage.Hidden
-        }
-    }
-
-    fun openTab(tab: Tab, origin: Offset? = null) {
-        revealOrigin = origin
-            ?: tabCenters[tab]
-            ?: Offset(contentBounds.center.x, contentBounds.bottom)
+    // 主菜单收进左侧抽屉：点头像打开，不再用底部导航
+    fun openTab(tab: Tab) {
+        if (tab == Tab.Market) marketSymbolId = null
         screenIndex = tab.ordinal
-        navStage = NavStage.Full
-        barPulse++
+        scope.launch { drawerState.close() }
     }
 
     if (aiConfigOpen) {
@@ -206,7 +199,9 @@ fun HomelabApp(viewModel: MainViewModel) {
 
     BackHandler {
         when {
-            !screen.isPrimary -> openTab(Tab.Home)
+            drawerState.isOpen -> scope.launch { drawerState.close() }
+            screen == Tab.Market && marketSymbolId != null -> marketSymbolId = null
+            screen != Tab.Home -> openTab(Tab.Home)
             exitArmed -> context.findActivity()?.finish()
             else -> exitArmed = true
         }
@@ -214,65 +209,39 @@ fun HomelabApp(viewModel: MainViewModel) {
 
     val openUrl = browserUrl
     WallpaperBackdrop(state.settings) {
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = true,
+        drawerContent = {
+            HomelabDrawer(
+                state = state,
+                screen = screen,
+                onSelect = { openTab(it) },
+                onToggle = viewModel::toggleChecklist,
+                onEditTodos = { todoEditorOpen = true },
+            )
+        },
+    ) {
     Box(Modifier.fillMaxSize()) {
     Scaffold(
         containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding(),
-                contentAlignment = Alignment.BottomCenter,
-            ) {
-                AnimatedContent(
-                    targetState = navStage,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.BottomCenter,
-                    transitionSpec = {
-                        (fadeIn(tween(220)) + scaleIn(initialScale = 0.94f)) togetherWith
-                            (fadeOut(tween(140)) + scaleOut(targetScale = 0.94f))
-                    },
-                    label = "mainNavBar",
-                ) { stage ->
-                    when (stage) {
-                        NavStage.Full -> HomelabNavBar(
-                            tabs = primaryTabs,
-                            selected = screen,
-                            onSelect = { openTab(it) },
-                            onTabCenter = { tab, center -> tabCenters[tab] = center },
-                            modifier = Modifier
-                                .padding(horizontal = 18.dp, vertical = 10.dp)
-                                .widthIn(max = 560.dp),
-                        )
-                        NavStage.Mini -> MiniNavBar(
-                            active = screen,
-                            onExpand = {
-                                navStage = NavStage.Full
-                                barPulse++
-                            },
-                            modifier = Modifier.padding(bottom = 2.dp),
-                        )
-                        NavStage.Hidden -> NavHandle(
-                            onExpand = {
-                                navStage = NavStage.Full
-                                barPulse++
-                            },
-                        )
-                    }
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (screen != Tab.Home) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    NavAvatar(onClick = { scope.launch { drawerState.open() } })
                 }
             }
-        },
-    ) { padding ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .onGloballyPositioned { contentBounds = it.boundsInRoot() },
-        ) {
+            Box(Modifier.weight(1f)) {
             CircularReveal(
                 target = screen,
-                origin = revealOrigin - contentBounds.topLeft,
+                origin = Offset(48f, 24f),
             ) { active ->
             when (active) {
                 Tab.Home -> HomeScreen(
@@ -289,11 +258,46 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onOpenFiles = { fileInsightOpen = true },
                     onOpenCalendar = { openTab(Tab.Calendar) },
                     onLoadDeviceUsage = viewModel::loadDeviceUsage,
+                    onOpenMenu = { scope.launch { drawerState.open() } },
+                    onRefreshMarket = viewModel::refreshMarket,
+                    onSearchMarket = viewModel::searchMarket,
+                    onSaveMarketSymbols = viewModel::saveMarketSymbols,
+                    onSaveMarketPinnedSymbols = viewModel::saveMarketPinnedSymbols,
+                    onResetMarketSymbols = viewModel::resetMarketSymbols,
+                    onOpenMarketSymbol = { symbolId ->
+                        marketSymbolId = symbolId
+                        screenIndex = Tab.Market.ordinal
+                    },
+                    onPreviewMarketSymbol = viewModel::openMarketPreview,
+                )
+                Tab.Market -> MarketScreen(
+                    state = state,
+                    selectedSymbolId = marketSymbolId,
+                    onSelectSymbol = { marketSymbolId = it },
+                    onCloseDetail = { marketSymbolId = null },
+                    onRefreshQuotes = viewModel::refreshMarket,
+                    onRefreshExtras = viewModel::refreshMarketExtras,
+                    onLoadBars = viewModel::loadMarketBars,
+                    onLoadIntraday = viewModel::loadIntraday,
+                    onAnalyze = viewModel::analyzeMarket,
+                    onRateNews = viewModel::rateMarketNews,
+                    onPreviewSymbol = viewModel::openMarketPreview,
+                    onSetRefreshSeconds = viewModel::setMarketRefreshSeconds,
+                    onSearch = viewModel::searchMarket,
+                    onSaveSymbols = viewModel::saveMarketSymbols,
+                    onSavePinnedSymbols = viewModel::saveMarketPinnedSymbols,
+                    onResetSymbols = viewModel::resetMarketSymbols,
                 )
                 Tab.Calendar -> CalendarScreen(
                     state = state,
                     onSave = viewModel::saveCalendarEntry,
                     onDelete = viewModel::deleteCalendarEntry,
+                    onToggleDone = viewModel::setCalendarEntryDone,
+                    onLoadMonth = viewModel::loadCalendarBills,
+                    onOpenBills = { month ->
+                        viewModel.selectMonth(month)
+                        openTab(Tab.Bills)
+                    },
                 )
                 Tab.Services -> ServicesScreen(
                     state = state,
@@ -310,6 +314,15 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onRefreshBalance = viewModel::refreshBalanceCandidates,
                     onConfirmBalance = viewModel::confirmBalanceCandidate,
                     onRejectBalance = viewModel::rejectBalanceCandidate,
+                )
+                Tab.Watch -> WatchScreen(
+                    state = state,
+                    onTestNotification = viewModel::testWatchNotification,
+                    onSaveRule = viewModel::saveWatchRule,
+                    onDeleteRule = viewModel::deleteWatchRule,
+                    onToggleRule = viewModel::toggleWatchRule,
+                    onRunNow = viewModel::runWatchNow,
+                    onLoadTypes = viewModel::loadWatchTypes,
                 )
                 Tab.Ai -> AiScreen(
                     state = state,
@@ -341,10 +354,24 @@ fun HomelabApp(viewModel: MainViewModel) {
                 )
             }
             }
+            }
         }
     }
     openUrl?.let { url ->
         InAppBrowserScreen(url = url, onClose = { browserUrl = null })
+    }
+    state.market.previewSymbol?.let { symbolId ->
+        MarketIntradaySheet(
+            symbol = com.poi.homelab.feature.market.findMarketSymbol(
+                state.settings.marketPinnedSymbols,
+                state.settings.marketSymbols,
+                symbolId,
+            ),
+            series = if (state.market.intradaySymbol == symbolId) state.market.intraday else null,
+            loading = state.market.intradayLoading && state.market.intradaySymbol == symbolId,
+            error = if (state.market.intradaySymbol == symbolId) state.market.intradayError else null,
+            onDismiss = viewModel::closeMarketPreview,
+        )
     }
     if (billImportOpen) {
         BillImportScreen(
@@ -379,6 +406,15 @@ fun HomelabApp(viewModel: MainViewModel) {
         )
     }
     }
+    }
+    }
+
+    if (todoEditorOpen) {
+        TodoEditorSheet(
+            items = state.todos,
+            onDismiss = { todoEditorOpen = false },
+            onSave = viewModel::saveTodos,
+        )
     }
 
     state.pendingAction?.let { pending ->
@@ -453,220 +489,128 @@ fun HomelabApp(viewModel: MainViewModel) {
     }
 }
 
+/** 左侧导航抽屉：点头像打开，包含全部页面入口和今日清单。 */
 @Composable
-private fun HomelabNavBar(
-    tabs: List<Tab>,
-    selected: Tab,
+private fun HomelabDrawer(
+    state: UiState,
+    screen: Tab,
     onSelect: (Tab) -> Unit,
-    onTabCenter: (Tab, Offset) -> Unit,
-    modifier: Modifier = Modifier,
+    onToggle: (String) -> Unit,
+    onEditTodos: () -> Unit,
 ) {
-    val primary = MaterialTheme.colorScheme.primary
-    Surface(
-        modifier = modifier.fillMaxWidth().height(58.dp),
-        shape = RoundedCornerShape(29.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 9.dp,
+    ModalDrawerSheet(
+        modifier = Modifier.width(320.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface,
+        drawerContentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            val itemWidth = maxWidth / tabs.size
-            val selectedIndex = tabs.indexOf(selected).coerceAtLeast(0)
-            val indicatorX by animateDpAsState(
-                targetValue = itemWidth * selectedIndex,
-                animationSpec = spring(dampingRatio = 0.78f, stiffness = 340f),
-                label = "navIndicatorX",
-            )
-            Box(
-                modifier = Modifier
-                    .offset(x = indicatorX + 4.dp, y = 6.dp)
-                    .width((itemWidth - 8.dp).coerceAtLeast(0.dp))
-                    .height(46.dp)
-                    .clip(RoundedCornerShape(23.dp))
-                    .background(primary.copy(alpha = 0.11f))
-                    .border(1.dp, primary.copy(alpha = 0.16f), RoundedCornerShape(23.dp)),
-            )
-            Row(Modifier.fillMaxSize()) {
-                tabs.forEach { tab ->
-                    NavItem(
-                        tab = tab,
-                        active = tab == selected,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .onGloballyPositioned { coordinates ->
-                                onTabCenter(tab, coordinates.boundsInRoot().center)
-                            },
-                        onClick = { onSelect(tab) },
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(R.drawable.app_avatar),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("poi's home", style = MaterialTheme.typography.titleLarge)
+                    val health = state.health
+                    Text(
+                        text = if (health == null) {
+                            todayLabel()
+                        } else {
+                            "${todayLabel()} · ${health.summary.running}/${health.summary.total} 运行"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun NavItem(
-    tab: Tab,
-    active: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val tint by animateColorAsState(
-        targetValue = if (active) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        animationSpec = tween(220),
-        label = "navItemTint",
-    )
-    val iconScale by animateFloatAsState(
-        targetValue = if (active) 1.06f else 0.94f,
-        animationSpec = spring(dampingRatio = 0.62f, stiffness = 420f),
-        label = "navItemScale",
-    )
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(23.dp))
-            .selectable(
-                selected = active,
-                onClick = onClick,
-                role = Role.Tab,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                painter = painterResource(tab.icon),
-                contentDescription = if (active) null else tab.label,
-                tint = tint,
-                modifier = Modifier
-                    .size(20.dp)
-                    .graphicsLayer {
-                        scaleX = iconScale
-                        scaleY = iconScale
-                    },
-            )
-            AnimatedVisibility(
-                visible = active,
-                enter = fadeIn(tween(200)) + expandHorizontally(
-                    animationSpec = tween(240, easing = FastOutSlowInEasing),
-                    expandFrom = Alignment.Start,
-                ),
-                exit = fadeOut(tween(120)) + shrinkHorizontally(
-                    animationSpec = tween(160, easing = FastOutSlowInEasing),
-                    shrinkTowards = Alignment.Start,
-                ),
-            ) {
+            Spacer(Modifier.height(14.dp))
+            Tab.entries.forEach { tab ->
+                DrawerRow(
+                    tab = tab,
+                    active = tab == screen,
+                    onClick = { onSelect(tab) },
+                )
+            }
+            ThinDivider(Modifier.padding(vertical = 14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = tab.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = tint,
-                    maxLines = 1,
-                    modifier = Modifier.padding(start = 5.dp),
+                    text = "今日清单",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
                 )
+                InlineAction("编辑", onEditTodos)
             }
-        }
-    }
-}
-
-@Composable
-private fun MiniNavBar(
-    active: Tab,
-    onExpand: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val primary = MaterialTheme.colorScheme.primary
-    val activeIndex = primaryTabs.indexOf(active).coerceAtLeast(0)
-    val slotWidth = 14.dp
-    val rowWidth = slotWidth * primaryTabs.size
-    val rowStart = (68.dp - rowWidth) / 2
-    val capsuleX by animateDpAsState(
-        targetValue = rowStart + slotWidth * activeIndex,
-        animationSpec = spring(dampingRatio = 0.76f, stiffness = 360f),
-        label = "miniNavX",
-    )
-    Box(
-        modifier = modifier
-            .width(68.dp)
-            .height(48.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onExpand,
+            Spacer(Modifier.height(6.dp))
+            DailyChecklistCard(
+                items = state.todos.map { ChecklistItem(it.id, it.label) },
+                checked = state.checkedToday,
+                onToggle = onToggle,
+                onEdit = onEditTodos,
             )
-            .semantics { contentDescription = "展开导航菜单" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            modifier = Modifier.width(68.dp).height(32.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 7.dp,
-        ) {
-            Box(Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .width(rowWidth)
-                        .height(32.dp),
-                ) {
-                    repeat(primaryTabs.size) {
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(5.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.28f),
-                                    ),
-                            )
-                        }
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .offset(x = capsuleX)
-                        .width(14.dp)
-                        .height(5.dp)
-                        .clip(CircleShape)
-                        .background(primary),
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun NavHandle(onExpand: () -> Unit) {
-    Box(
+private fun DrawerRow(tab: Tab, active: Boolean, onClick: () -> Unit) {
+    val tint = if (active) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(24.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onExpand,
+            .padding(top = 2.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.11f) else Color.Transparent,
             )
-            .semantics { contentDescription = "展开导航菜单" },
-        contentAlignment = Alignment.BottomCenter,
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .padding(bottom = 7.dp)
-                .width(36.dp)
-                .height(3.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)),
+        Icon(
+            painter = painterResource(tab.icon),
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = tab.label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
     }
+}
+
+/** 左上角头像：点开导航抽屉。首页复用标题里的头像，其余页面用这个。 */
+@Composable
+private fun NavAvatar(onClick: () -> Unit) {
+    Image(
+        painter = painterResource(R.drawable.app_avatar),
+        contentDescription = "打开导航",
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+            .clickable(onClick = onClick),
+    )
 }
 
 private fun Context.findActivity(): Activity? {

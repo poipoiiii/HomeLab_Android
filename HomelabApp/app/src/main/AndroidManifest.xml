@@ -119,6 +119,34 @@
             android:exported="true"
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
+        <!-- 日历提醒：每条开启了提醒的记录到点发本地通知 -->
+        <receiver
+            android:name=".feature.calendar.CalendarReminderReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".feature.calendar.CalendarReminderBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 价格监控：按规则定时查一次在售，命中发本地通知 -->
+        <receiver
+            android:name=".feature.watch.WatchAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".feature.watch.WatchBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

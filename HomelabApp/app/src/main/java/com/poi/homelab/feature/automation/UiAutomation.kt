@@ -41,7 +41,8 @@ class UiAutomationService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        JumpGuard.onEvent(this, event)
+        // 跳转守卫按用户要求暂时停用，只保留开屏广告跳过。
+        // JumpGuard.onEvent(this, event)
         SplashSkip.onEvent(this, event)
     }
 

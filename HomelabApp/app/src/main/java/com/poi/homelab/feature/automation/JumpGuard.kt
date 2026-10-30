@@ -2,6 +2,7 @@ package com.poi.homelab.feature.automation
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -38,6 +39,7 @@ object JumpGuard {
         "com.poi.homelab",
         "com.miui.home",
         "com.android.systemui",
+        "com.miui.securitycenter",
         "com.android.chrome",
         "com.microsoft.emmx",
         "com.tencent.mm",
@@ -85,6 +87,8 @@ object JumpGuard {
     private var blockedAt = 0L
     private val handler = Handler(Looper.getMainLooper())
     private var kickJob: Runnable? = null
+    private var launchable: Set<String> = emptySet()
+    private var launchableAt = 0L
 
     /** 最近一次经过桌面 / 通知栏 / 最近任务的时间，用来识别“用户自己切的应用”。 */
     private var lastNeutralAt = 0L
@@ -129,6 +133,8 @@ object JumpGuard {
         if (!isEnabled(service)) return
         if (source in ALLOW_SOURCES) return
         if (pkg in ALLOW_TARGETS) return
+        // 输入法、悬浮窗、系统弹窗也会抢前台，它们没有桌面入口，不能当成跳转
+        if (!isLaunchableApp(service, source) || !isLaunchableApp(service, pkg)) return
 
         val now = SystemClock.uptimeMillis()
         // 刚经过通知栏或桌面，说明是用户自己点的通知 / 图标，不是广告跳转
@@ -148,25 +154,43 @@ object JumpGuard {
     }
 
     /**
-     * 目标应用刚启动时，一次返回往往只是关掉它自己的引导页（淘宝就是先关红包弹窗）。
-     * 隔 600ms 检查一次前台，还在目标应用就再按一次，最多三次，回到来源就停手。
+     * 目标应用刚启动时，前几下返回常被它自己的开屏/引导页吃掉（淘宝要等 Welcome 页面走完）。
+     * 每 900ms 复查一次前台，还在目标应用就再按一次，最多五次，回到来源就停手。
      */
     private fun kickBack(service: AccessibilityService, source: String, target: String) {
         kickJob?.let { handler.removeCallbacks(it) }
         var attempts = 0
         val job = object : Runnable {
             override fun run() {
-                if (attempts >= 3) return
+                if (attempts >= 5) return
                 val current = service.rootInActiveWindow?.packageName?.toString().orEmpty()
                 if (current.isNotEmpty() && current != target) return
                 attempts++
                 expectReturnTo = source
                 service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                handler.postDelayed(this, 600)
+                handler.postDelayed(this, 900)
             }
         }
         kickJob = job
-        handler.postDelayed(job, 400)
+        handler.postDelayed(job, 500)
+    }
+
+    /**
+     * 只认「桌面上能点开的应用」。输入法（百度输入法抢前台就是这次误拦的元凶）、
+     * 悬浮窗、系统弹窗都不在这个集合里，直接跳过。
+     */
+    private fun isLaunchableApp(service: AccessibilityService, pkg: String): Boolean {
+        val now = SystemClock.uptimeMillis()
+        if (launchable.isEmpty() || now - launchableAt > 60_000) {
+            launchable = runCatching {
+                service.packageManager.queryIntentActivities(
+                    Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
+                    0,
+                ).mapNotNull { it.activityInfo?.packageName }.toSet()
+            }.getOrDefault(emptySet())
+            launchableAt = now
+        }
+        return pkg in launchable
     }
 
     private fun record(context: Context, from: String, to: String) {

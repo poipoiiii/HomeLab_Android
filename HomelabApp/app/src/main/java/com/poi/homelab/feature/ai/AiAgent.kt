@@ -184,6 +184,52 @@ class AiAgent(
         return text
     }
 
+    /**
+     * 行情详情页的一键分析：把报价、近 60 日走势、财报日历和相关消息整理后交给模型。
+     * 不进入聊天会话，也不调用工具。
+     */
+    suspend fun analyzeStock(provider: AiProvider, brief: String): String {
+        if (provider.baseUrl.isBlank() || provider.model.isBlank()) {
+            throw IOException("AI 服务商还没有配置好")
+        }
+        if (provider.apiKey.isBlank() && provider.requiresKey) {
+            throw IOException("还没有填写 API Key")
+        }
+        if (brief.isBlank()) throw IOException("还没有可分析的行情数据")
+
+        val prompt = """
+            你是小砂糖，正在帮 poi 看一只标的。下面是本地整理的行情摘要：
+            现价、近期日涨跌、财报日历和本地评分后的市场消息，数据可能延迟，也可能不完整。
+
+            请用中文输出一份克制的分析，按这几个小标题组织（用 Markdown）：
+            1. 现在的样子：近期走势和波动，用摘要里的数字说话。
+            2. 日历上的事：接下来有哪些财报或已知事件，说明日期。
+            3. 消息面：按消息重要程度挑 2-3 条，说明它为什么可能重要。
+            4. 需要盯的点：给出观察清单，不要给买卖指令。
+            5. 风险：数据延迟、消息不确定、财报预期偏差等。
+
+            要求：
+            - 只根据摘要里出现的信息，不要编造价格、日期或新闻。
+            - 摘要被截断时明确说明结果不完整。
+            - 不要用“作为 AI”这类腔调，直接说事。
+
+            行情摘要：
+            $brief
+        """.trimIndent()
+
+        val request = LlmRequest(
+            contents = listOf(Content(role = Role.USER, parts = listOf(Part(text = prompt)))),
+            config = GenerateContentConfig(temperature = 0.3f),
+        )
+        val text = model(provider, timeoutSeconds = 120)
+            .generateContent(request, stream = false)
+            .toList()
+            .mapNotNull { it.content?.text() }
+            .joinToString("")
+        if (text.isBlank()) throw IOException("模型没有返回分析结果")
+        return text
+    }
+
     /** 首次发送时用已保存的对话补齐上下文，让 AI 能接着上次聊。 */
     private suspend fun ensureSession(history: List<ChatMessage>) {
         val key = SessionKey(APP_NAME, USER_ID, SESSION_ID)

@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** 离家模式下「为什么连不上」的原因，不再只有通 / 不通。 */
+/** 脱机模式下「为什么连不上」的原因，不再只有通 / 不通。 */
 enum class ReachabilityState {
     Online,
     NoNetwork,

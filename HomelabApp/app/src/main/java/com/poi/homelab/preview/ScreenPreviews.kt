@@ -14,7 +14,9 @@ import com.poi.homelab.feature.bills.BillTransaction
 import com.poi.homelab.feature.bills.CategoryAmount
 import com.poi.homelab.feature.bills.MonthStats
 import com.poi.homelab.feature.bills.ui.BillsScreen
+import com.poi.homelab.feature.calendar.CALENDAR_ANNIVERSARY
 import com.poi.homelab.feature.calendar.CALENDAR_IMPORTANT
+import com.poi.homelab.feature.calendar.CALENDAR_TODO
 import com.poi.homelab.feature.calendar.CALENDAR_TRAVEL
 import com.poi.homelab.feature.calendar.CalendarEntry
 import com.poi.homelab.feature.calendar.ui.CalendarScreen
@@ -196,6 +198,8 @@ private val previewState = UiState(
     transactions = previewTransactions,
     billMonth = "2026-10",
     checkedToday = setOf("lab", "bill"),
+    calendarBillsMonth = YearMonth.now().toString(),
+    calendarTransactions = previewTransactions,
     calendarEntries = listOf(
         CalendarEntry(
             id = 1,
@@ -211,6 +215,23 @@ private val previewState = UiState(
             title = "交房租",
             type = CALENDAR_IMPORTANT,
             note = "记得转账",
+            time = "09:30",
+            reminder = true,
+        ),
+        CalendarEntry(
+            id = 3,
+            date = YearMonth.now().atDay(24).toString(),
+            title = "领证两周年",
+            type = CALENDAR_ANNIVERSARY,
+        ),
+        CalendarEntry(
+            id = 4,
+            date = LocalDate.now().toString(),
+            title = "取快递",
+            type = CALENDAR_TODO,
+            time = "18:00",
+            reminder = true,
+            done = true,
         ),
     ),
     chatMessages = listOf(
@@ -346,7 +367,7 @@ private fun HomeDarkPreview() {
 @Composable
 private fun CalendarPreview() {
     HomelabTheme("light") {
-        CalendarScreen(previewState, {}, {})
+        CalendarScreen(previewState, {}, {}, { _, _ -> }, {}, {}, isPreview = true)
     }
 }
 

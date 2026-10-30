@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
@@ -64,14 +66,15 @@ import com.poi.homelab.core.util.hasPhotoAccess
 import com.poi.homelab.core.util.hasUsageAccess
 import com.poi.homelab.core.util.photoPermission
 import com.poi.homelab.feature.automation.AutomationRestore
-import com.poi.homelab.feature.automation.JumpGuard
 import com.poi.homelab.feature.automation.SplashSkip
+import com.poi.homelab.feature.automation.SplashSubscriptions
 import com.poi.homelab.feature.automation.UiAutomation
 import com.poi.homelab.feature.homarr.HomarrBoard
 import com.poi.homelab.feature.notify.ui.CaptureSettingsCard
 import com.poi.homelab.feature.photos.PhotoAutoSync
 import com.poi.homelab.feature.photos.PhotoSyncStatus
 import com.poi.homelab.navigation.UiState
+import kotlinx.coroutines.launch
 
 private val THEMES = listOf(
     "system" to "跟随系统",
@@ -120,6 +123,15 @@ fun SettingsScreen(
     var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
     var deviceName by rememberSaveable(settings.deviceName) { mutableStateOf(settings.deviceName) }
     var weatherCity by rememberSaveable(settings.weatherCity) { mutableStateOf(settings.weatherCity) }
+    // 已经填好的连接项默认收起，只留一行摘要，点「修改」再展开
+    var labExpanded by rememberSaveable(settings.labUrl) { mutableStateOf(settings.labUrl.isBlank()) }
+    var billExpanded by rememberSaveable(settings.billUrl) { mutableStateOf(settings.billUrl.isBlank()) }
+    var homarrExpanded by rememberSaveable(settings.homarrUrl, settings.homarrApiKey) {
+        mutableStateOf(settings.homarrUrl.isBlank() && settings.homarrApiKey.isBlank())
+    }
+    var cloudreveExpanded by rememberSaveable(settings.cloudreveUrl) {
+        mutableStateOf(settings.cloudreveUrl.isBlank())
+    }
     var wallpaperOpacity by remember(settings.wallpaperOpacity) {
         mutableFloatStateOf(settings.wallpaperOpacity)
     }
@@ -149,12 +161,8 @@ fun SettingsScreen(
         mutableStateOf(if (isPreview) emptySet<String>() else SplashSkip.extraPackages(context))
     }
     var splashAppsOpen by rememberSaveable { mutableStateOf(false) }
-    var jumpGuard by remember {
-        mutableStateOf(if (isPreview) false else JumpGuard.isEnabled(context))
-    }
-    var jumpBlocked by remember {
-        mutableStateOf(if (isPreview) 0 else JumpGuard.blockedCount(context))
-    }
+    var splashSubsOpen by rememberSaveable { mutableStateOf(false) }
+    var splashSubsVersion by remember { mutableStateOf(0) }
     if (!isPreview) {
         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
             usageGranted = hasUsageAccess(context)
@@ -162,8 +170,6 @@ fun SettingsScreen(
             automationGranted = UiAutomation.isEnabled(context)
             autoRestoreReady = AutomationRestore.canAutoRestore(context)
             splashExtra = SplashSkip.extraPackages(context)
-            jumpGuard = JumpGuard.isEnabled(context)
-            jumpBlocked = JumpGuard.blockedCount(context)
             photoSyncStatus = PhotoSyncStatus.describe(context)
             // 用户可能刚在系统里开了精确闹钟，回到前台时重排一次，让下一次走精确时间
             PhotoAutoSync.apply(context, settings.photoAutoSync, settings.photoSyncHour)
@@ -374,122 +380,141 @@ fun SettingsScreen(
         }
         item {
             CreamCard {
-                Text("Lab Tools", style = MaterialTheme.typography.titleMedium)
-                SettingHint(
-                    "lab-tools 的 MCP Streamable HTTP 地址，通常带 :8765，路径会自动补 /mcp。",
-                    detailed,
-                    Modifier.padding(top = 4.dp, bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = labUrl,
-                    onValueChange = { labUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("http://100.x.x.x:8765") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
+                ConnectionSection(
+                    title = "Lab Tools",
+                    summary = labUrl,
+                    configured = settings.labUrl.isNotBlank(),
+                    expanded = labExpanded,
+                    onToggle = { labExpanded = !labExpanded },
+                ) {
+                    SettingHint(
+                        "lab-tools 的 MCP Streamable HTTP 地址，通常带 :8765，路径会自动补 /mcp。",
+                        detailed,
+                        Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = labUrl,
+                        onValueChange = { labUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("http://100.x.x.x:8765") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
 
-                Text(
-                    "账本",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 18.dp),
-                )
-                SettingHint(
-                    "bill-ai 地址，本机是 :8091，tailnet 入口可能是 https://xxx.ts.net:8451。",
-                    detailed,
-                    Modifier.padding(top = 4.dp, bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = billUrl,
-                    onValueChange = { billUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("http://100.x.x.x:8091") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
+                ThinDivider(Modifier.padding(vertical = 12.dp))
+                ConnectionSection(
+                    title = "账本",
+                    summary = billUrl,
+                    configured = settings.billUrl.isNotBlank(),
+                    expanded = billExpanded,
+                    onToggle = { billExpanded = !billExpanded },
+                ) {
+                    SettingHint(
+                        "bill-ai 地址，本机是 :8091，tailnet 入口可能是 https://xxx.ts.net:8451。",
+                        detailed,
+                        Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = billUrl,
+                        onValueChange = { billUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("http://100.x.x.x:8091") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
 
-                Text(
-                    "Homarr",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 18.dp),
-                )
-                SettingHint(
-                    "看板来源。填 tailnet 入口即可（如 https://xxx.ts.net），首页的快捷入口会换成这块看板。",
-                    detailed,
-                    Modifier.padding(top = 4.dp, bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = homarrUrl,
-                    onValueChange = { homarrUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("https://xxx.ts.net") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                OutlinedTextField(
-                    value = homarrApiKey,
-                    onValueChange = { homarrApiKey = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    placeholder = { Text("API Key（管理 → Tools → API）") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                OutlinedTextField(
-                    value = homarrBoard,
-                    onValueChange = { homarrBoard = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    placeholder = { Text("看板名，留空自动用首页看板") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
+                ThinDivider(Modifier.padding(vertical = 12.dp))
+                ConnectionSection(
+                    title = "Homarr",
+                    summary = homarrUrl,
+                    configured = settings.homarrUrl.isNotBlank() || settings.homarrApiKey.isNotBlank(),
+                    expanded = homarrExpanded,
+                    onToggle = { homarrExpanded = !homarrExpanded },
+                ) {
+                    SettingHint(
+                        "看板来源。填 tailnet 入口即可（如 https://xxx.ts.net），首页的快捷入口会换成这块看板。",
+                        detailed,
+                        Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = homarrUrl,
+                        onValueChange = { homarrUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("https://xxx.ts.net") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    OutlinedTextField(
+                        value = homarrApiKey,
+                        onValueChange = { homarrApiKey = it },
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        placeholder = { Text("API Key（管理 → Tools → API）") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    OutlinedTextField(
+                        value = homarrBoard,
+                        onValueChange = { homarrBoard = it },
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        placeholder = { Text("看板名，留空自动用首页看板") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
 
-                Text(
-                    "Cloudreve（WebDAV）",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 18.dp),
-                )
-                SettingHint(
-                    "填站点根地址即可，会自动拼 /dav/。先在 Cloudreve 的 WebDAV 页面创建 WebDAV 账户" +
-                        "（用户组要允许 WebDAV）：账号填注册邮箱，密码用该账户生成/显示的密码，不是登录密码。",
-                    detailed,
-                    Modifier.padding(top = 4.dp, bottom = 8.dp),
-                )
-                OutlinedTextField(
-                    value = cloudreveUrl,
-                    onValueChange = { cloudreveUrl = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("https://xxx.ts.net:5212") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                OutlinedTextField(
-                    value = cloudreveUser,
-                    onValueChange = { cloudreveUser = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    placeholder = { Text("Cloudreve 账号（邮箱）") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
-                OutlinedTextField(
-                    value = cloudrevePassword,
-                    onValueChange = { cloudrevePassword = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    placeholder = { Text("Cloudreve WebDAV 密码（不是登录密码）") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                )
-                OutlinedTextField(
-                    value = cloudreveDir,
-                    onValueChange = { cloudreveDir = it },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    placeholder = { Text("上传目录，默认 手机照片") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                )
+                ThinDivider(Modifier.padding(vertical = 12.dp))
+                ConnectionSection(
+                    title = "Cloudreve（WebDAV）",
+                    summary = cloudreveUrl,
+                    configured = settings.cloudreveUrl.isNotBlank(),
+                    expanded = cloudreveExpanded,
+                    onToggle = { cloudreveExpanded = !cloudreveExpanded },
+                ) {
+                    SettingHint(
+                        "填站点根地址即可，会自动拼 /dav/。先在 Cloudreve 的 WebDAV 页面创建 WebDAV 账户" +
+                            "（用户组要允许 WebDAV）：账号填注册邮箱，密码用该账户生成/显示的密码，不是登录密码。",
+                        detailed,
+                        Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                    OutlinedTextField(
+                        value = cloudreveUrl,
+                        onValueChange = { cloudreveUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("https://xxx.ts.net:5212") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    OutlinedTextField(
+                        value = cloudreveUser,
+                        onValueChange = { cloudreveUser = it },
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        placeholder = { Text("Cloudreve 账号（邮箱）") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    OutlinedTextField(
+                        value = cloudrevePassword,
+                        onValueChange = { cloudrevePassword = it },
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        placeholder = { Text("Cloudreve WebDAV 密码（不是登录密码）") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    OutlinedTextField(
+                        value = cloudreveDir,
+                        onValueChange = { cloudreveDir = it },
+                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                        placeholder = { Text("上传目录，默认 手机照片") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
 
                 ThinDivider(Modifier.padding(vertical = 12.dp))
                 Row(
@@ -739,12 +764,26 @@ fun SettingsScreen(
                         enabled = !isPreview,
                     )
                 }
+                val covered = remember(splashExtra, splashSubsVersion) {
+                    if (isPreview) SplashSkip.supportedCount() else SplashSkip.packages(context).size
+                }
+                val subsSummary = remember(splashSubsVersion) {
+                    if (isPreview) {
+                        "未启用"
+                    } else {
+                        val enabledIds = SplashSubscriptions.enabledSources(context)
+                        val names = SplashSubscriptions.sources(context)
+                            .filter { it.id in enabledIds }
+                            .joinToString("、") { it.name }
+                        if (names.isEmpty()) "未启用，只用内置名单" else names
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "开屏跳过应用：${SplashSkip.supportedCount() + splashExtra.size} 个",
+                        text = "开屏跳过应用：$covered 个",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -755,35 +794,23 @@ fun SettingsScreen(
                         enabled = !isPreview,
                     )
                 }
-                ThinDivider(Modifier.padding(vertical = 12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("禁止应用跳转", style = MaterialTheme.typography.titleMedium)
-                        SettingHint(
-                            "点广告、推广位直接拉起别的 App 时，自动按返回退回原应用。" +
-                                "微信、支付宝、QQ、游戏和 Chrome/Edge 放行；小米浏览器按你的要求不放行。" +
-                                "退回目标应用会闪一下，这是非 root 方案做不到无感的地方。",
-                            detailed,
-                            Modifier.padding(top = 4.dp),
-                        )
-                        Text(
-                            text = "累计拦下 $jumpBlocked 次",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = jumpGuard,
-                        onCheckedChange = {
-                            jumpGuard = it
-                            JumpGuard.setEnabled(context, it)
-                        },
+                    Text(
+                        text = "规则订阅：$subsSummary",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    InlineAction(
+                        text = "订阅",
+                        onClick = { splashSubsOpen = true },
                         enabled = !isPreview,
                     )
                 }
+                ThinDivider(Modifier.padding(vertical = 12.dp))
                 Text(
                     text = if (autoRestoreReady) {
                         "重启自动恢复：已就绪"
@@ -908,6 +935,17 @@ fun SettingsScreen(
         )
     }
 
+    if (splashSubsOpen && !isPreview) {
+        SplashSubsDialog(
+            context = context,
+            onChanged = { splashSubsVersion++ },
+            onDismiss = {
+                splashSubsOpen = false
+                splashSubsVersion++
+            },
+        )
+    }
+
     if (syncDialogOpen) {
         PhotoSyncDialog(
             settings = settings,
@@ -1003,7 +1041,7 @@ private fun SplashAppsDialog(
             Column(Modifier.heightIn(max = 460.dp)) {
                 Text(
                     text = "内置 ${builtin.size} 个常见应用，常开；下面可以再加你常用的 App。" +
-                        "只会点带「跳过」字样的小按钮，找不到就放弃。",
+                        "只会点带「跳过」字样的小按钮，找不到就放弃。订阅带来的应用不在这里列。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1046,6 +1084,159 @@ private fun SplashAppsDialog(
                                 },
                                 enabled = !locked,
                             )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
+    )
+}
+
+/**
+ * 开屏跳过订阅：只从订阅里取「哪些应用有开屏广告」，点哪里、点几次仍由 [SplashSkip] 自己判断。
+ * 默认全部关闭，启用得越多白名单越大。
+ */
+@Composable
+private fun SplashSubsDialog(
+    context: Context,
+    onChanged: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var sources by remember { mutableStateOf(SplashSubscriptions.sources(context)) }
+    val installed = remember { launchableApps(context).associate { it.second to it.first } }
+    var busy by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var customUrl by remember { mutableStateOf("") }
+    var version by remember { mutableStateOf(0) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("开屏跳过订阅") },
+        text = {
+            Column(Modifier.heightIn(max = 500.dp)) {
+                Text(
+                    text = "订阅只用来判断「哪些应用有开屏广告」，点哪里、点几次仍由本机决定。" +
+                        "默认全部关闭；启用越多白名单越大，建议最多开一个。" +
+                        "订阅里的「全局开屏规则」会对所有应用生效，这里不启用。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                message?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                LazyColumn(Modifier.padding(top = 8.dp)) {
+                    items(sources, key = { it.id }) { source ->
+                        val pkgs = remember(source.id, version) {
+                            SplashSubscriptions.packages(context, source.id)
+                        }
+                        val hits = remember(pkgs, installed) { pkgs.mapNotNull { installed[it] } }
+                        val enabled = remember(source.id, version) {
+                            SplashSubscriptions.isEnabled(context, source.id)
+                        }
+                        val synced = remember(source.id, version) {
+                            SplashSubscriptions.syncedAt(context, source.id) > 0L
+                        }
+                        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(source.name, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        text = source.desc,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Switch(
+                                    checked = enabled,
+                                    onCheckedChange = { on ->
+                                        if (on && !synced) {
+                                            message = "先点「同步」拿到名单再启用"
+                                        } else {
+                                            SplashSubscriptions.setEnabled(context, source.id, on)
+                                            version++
+                                            onChanged()
+                                        }
+                                    },
+                                )
+                            }
+                            Text(
+                                text = when {
+                                    busy == source.id -> "同步中…"
+                                    !synced -> "未同步"
+                                    hits.isEmpty() -> "已同步 ${pkgs.size} 个，本机没有命中"
+                                    else -> "已同步 ${pkgs.size} 个，本机命中 ${hits.size} 个：" +
+                                        hits.take(6).joinToString("、") +
+                                        if (hits.size > 6) " 等" else ""
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                InlineAction(
+                                    text = if (synced) "更新" else "同步",
+                                    onClick = {
+                                        scope.launch {
+                                            busy = source.id
+                                            val result = SplashSubscriptions.sync(context, source)
+                                            busy = null
+                                            version++
+                                            message = result.fold(
+                                                onSuccess = { "已同步 ${source.name}：$it 个应用" },
+                                                onFailure = { "同步失败：${it.message}" },
+                                            )
+                                        }
+                                    },
+                                    enabled = busy == null,
+                                )
+                                if (source.custom) {
+                                    InlineAction(
+                                        text = "移除",
+                                        onClick = {
+                                            SplashSubscriptions.removeSource(context, source.id)
+                                            sources = SplashSubscriptions.sources(context)
+                                            version++
+                                            onChanged()
+                                        },
+                                        enabled = busy == null,
+                                    )
+                                }
+                            }
+                        }
+                        ThinDivider()
+                    }
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = customUrl,
+                                onValueChange = { customUrl = it },
+                                modifier = Modifier.weight(1f),
+                                label = { Text("自定义订阅地址") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                            TextButton(
+                                onClick = {
+                                    val added = SplashSubscriptions.addCustomSource(context, customUrl)
+                                    if (added == null) {
+                                        message = "地址无效或已存在"
+                                    } else {
+                                        message = "已添加 ${added.name}"
+                                        customUrl = ""
+                                        sources = SplashSubscriptions.sources(context)
+                                        version++
+                                    }
+                                },
+                            ) { Text("添加") }
                         }
                     }
                 }
@@ -1214,6 +1405,43 @@ private fun SettingHint(text: String, visible: Boolean, modifier: Modifier = Mod
         )
     } else {
         Spacer(Modifier.height(4.dp))
+    }
+}
+
+/**
+ * 连接项：已经填过的默认只留标题和一行摘要，点「修改」再展开输入框；
+ * 没配置过的直接展开，省一次点击。
+ */
+@Composable
+private fun ConnectionSection(
+    title: String,
+    summary: String,
+    configured: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f),
+        )
+        if (configured) {
+            InlineAction(text = if (expanded) "收起" else "修改", onClick = onToggle)
+        }
+    }
+    if (expanded || !configured) {
+        content()
+    } else {
+        Text(
+            text = summary.ifBlank { "已配置" },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }
 

@@ -15,6 +15,9 @@ import com.poi.homelab.BuildConfig
 import com.poi.homelab.feature.ai.AiProvider
 import com.poi.homelab.feature.ai.defaultAiProviders
 import com.poi.homelab.feature.homarr.HomarrBoard
+import com.poi.homelab.feature.market.MarketSymbol
+import com.poi.homelab.feature.market.defaultMarketSymbols
+import com.poi.homelab.feature.market.defaultPinnedMarketSymbols
 import java.io.IOException
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.Flow
@@ -63,6 +66,12 @@ data class AppSettings(
     val settingsDetailed: Boolean = true,
     /** 首页天气卡的城市名，空字符串表示不显示天气卡。 */
     val weatherCity: String = "",
+    /** 首页行情卡片的自选项，默认是国内金价、KOSPI。 */
+    val marketSymbols: List<MarketSymbol> = defaultMarketSymbols,
+    /** 置顶一行的指数，默认是六大指数，用户可自定义排序和增删。 */
+    val marketPinnedSymbols: List<MarketSymbol> = defaultPinnedMarketSymbols,
+    /** 行情自动刷新间隔（秒），最小 10 秒，避免把公开接口打得太频繁。 */
+    val marketRefreshSeconds: Int = 30,
 )
 
 class SettingsStore(private val context: Context) {
@@ -97,6 +106,9 @@ class SettingsStore(private val context: Context) {
         val WALLPAPER_DIM = floatPreferencesKey("wallpaper_dim")
         val SETTINGS_DETAILED = booleanPreferencesKey("settings_detailed")
         val WEATHER_CITY = stringPreferencesKey("weather_city")
+        val MARKET_SYMBOLS = stringPreferencesKey("market_symbols")
+        val MARKET_PINNED_SYMBOLS = stringPreferencesKey("market_pinned_symbols")
+        val MARKET_REFRESH_SECONDS = intPreferencesKey("market_refresh_seconds")
     }
 
     val settings: Flow<AppSettings> = context.homelabDataStore.data
@@ -148,6 +160,18 @@ class SettingsStore(private val context: Context) {
                 wallpaperDim = (prefs[Keys.WALLPAPER_DIM] ?: 0.5f).coerceIn(0f, 0.8f),
                 settingsDetailed = prefs[Keys.SETTINGS_DETAILED] ?: true,
                 weatherCity = prefs[Keys.WEATHER_CITY].orEmpty(),
+                // 没存过用默认；存过空列表说明用户把卡片清空了，不要回填默认值
+                marketSymbols = prefs[Keys.MARKET_SYMBOLS]
+                    ?.let { raw ->
+                        runCatching { settingsJson.decodeFromString<List<MarketSymbol>>(raw) }.getOrNull()
+                    }
+                    ?: defaultMarketSymbols,
+                marketPinnedSymbols = prefs[Keys.MARKET_PINNED_SYMBOLS]
+                    ?.let { raw ->
+                        runCatching { settingsJson.decodeFromString<List<MarketSymbol>>(raw) }.getOrNull()
+                    }
+                    ?: defaultPinnedMarketSymbols,
+                marketRefreshSeconds = (prefs[Keys.MARKET_REFRESH_SECONDS] ?: 30).coerceIn(10, 300),
             )
         }
 
@@ -180,6 +204,30 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.WALLPAPER_DIM] = value.wallpaperDim
             prefs[Keys.SETTINGS_DETAILED] = value.settingsDetailed
             prefs[Keys.WEATHER_CITY] = value.weatherCity.trim()
+            prefs[Keys.MARKET_SYMBOLS] = settingsJson.encodeToString(value.marketSymbols)
+            prefs[Keys.MARKET_PINNED_SYMBOLS] = settingsJson.encodeToString(value.marketPinnedSymbols)
+            prefs[Keys.MARKET_REFRESH_SECONDS] = value.marketRefreshSeconds.coerceIn(10, 300)
+        }
+    }
+
+    /** 只改置顶一行，避免和设置页保存时的整份状态互相覆盖。 */
+    suspend fun saveMarketPinnedSymbols(symbols: List<MarketSymbol>) {
+        context.homelabDataStore.edit { prefs ->
+            prefs[Keys.MARKET_PINNED_SYMBOLS] = settingsJson.encodeToString(symbols)
+        }
+    }
+
+    /** 只改行情刷新间隔。 */
+    suspend fun saveMarketRefreshSeconds(seconds: Int) {
+        context.homelabDataStore.edit { prefs ->
+            prefs[Keys.MARKET_REFRESH_SECONDS] = seconds.coerceIn(10, 300)
+        }
+    }
+
+    /** 只改行情自选，避免和设置页保存时的整份状态互相覆盖。 */
+    suspend fun saveMarketSymbols(symbols: List<MarketSymbol>) {
+        context.homelabDataStore.edit { prefs ->
+            prefs[Keys.MARKET_SYMBOLS] = settingsJson.encodeToString(symbols)
         }
     }
 }

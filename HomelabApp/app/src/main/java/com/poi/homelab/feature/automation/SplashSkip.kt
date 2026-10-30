@@ -72,6 +72,10 @@ object SplashSkip {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lastClickAt = HashMap<String, Long>()
 
+    /** 白名单合并结果：内置 + 手选 + 订阅，改动时清空重建。 */
+    @Volatile
+    private var packagesCache: Set<String>? = null
+
     /** 每次窗口切换换一代，旧一代里还没跑的定时任务会自己作废，避免点完又补一刀。 */
     private var generation = 0
 
@@ -97,11 +101,20 @@ object SplashSkip {
     /** 内置名单本身，设置页用来把这几项锁成常开。 */
     fun builtinPackages(): Set<String> = SUPPORTED
 
-    /** 内置名单 + 用户在设置里额外加的应用。 */
+    /** 内置名单 + 用户在设置里额外加的应用 + 已启用订阅里的应用。 */
     fun packages(context: Context): Set<String> =
-        SUPPORTED + context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getStringSet(KEY_EXTRA, emptySet())
-            .orEmpty()
+        packagesCache ?: buildPackages(context).also { packagesCache = it }
+
+    private fun buildPackages(context: Context): Set<String> = buildSet {
+        addAll(SUPPORTED)
+        addAll(extraPackages(context))
+        addAll(SplashSubscriptions.enabledPackages(context))
+    }
+
+    /** 订阅或手选名单变化后调用，下次匹配时重建。 */
+    fun invalidate() {
+        packagesCache = null
+    }
 
     fun extraPackages(context: Context): Set<String> =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -112,11 +125,13 @@ object SplashSkip {
     fun addPackage(context: Context, pkg: String) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.edit().putStringSet(KEY_EXTRA, extraPackages(context) + pkg).apply()
+        invalidate()
     }
 
     fun removePackage(context: Context, pkg: String) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.edit().putStringSet(KEY_EXTRA, extraPackages(context) - pkg).apply()
+        invalidate()
     }
 
     private fun recordClick(context: Context) {

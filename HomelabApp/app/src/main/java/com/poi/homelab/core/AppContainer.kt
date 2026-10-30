@@ -14,8 +14,13 @@ import com.poi.homelab.feature.home.ChecklistStore
 import com.poi.homelab.feature.home.TodoStore
 import com.poi.homelab.feature.lab.LabRepository
 import com.poi.homelab.feature.lab.McpClient
+import com.poi.homelab.feature.market.MarketMindStore
+import com.poi.homelab.feature.market.MarketRepository
 import com.poi.homelab.feature.photos.CloudreveRepository
 import com.poi.homelab.feature.weather.WeatherRepository
+import com.poi.homelab.feature.watch.CbgRepository
+import com.poi.homelab.feature.watch.WatchEngine
+import com.poi.homelab.feature.watch.WatchStore
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -50,4 +55,9 @@ class AppContainer(context: android.content.Context) {
     val homarr = HomarrRepository(http, json)
     val cloudreve = CloudreveRepository(http)
     val weather = WeatherRepository(http, json)
+    val market = MarketRepository(http, json)
+    val marketMind = MarketMindStore(appContext)
+    val watch = WatchStore(appContext)
+    val cbg = CbgRepository()
+    val watchEngine = WatchEngine(appContext, watch, cbg)
 }

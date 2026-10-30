@@ -18,7 +18,9 @@ import com.poi.homelab.core.util.photoPermission
 import com.poi.homelab.feature.automation.UiAutomation
 import com.poi.homelab.feature.bills.BillRepository
 import com.poi.homelab.feature.bills.BillTransaction
+import com.poi.homelab.feature.calendar.CALENDAR_ANNIVERSARY
 import com.poi.homelab.feature.calendar.CALENDAR_IMPORTANT
+import com.poi.homelab.feature.calendar.CALENDAR_TODO
 import com.poi.homelab.feature.calendar.CALENDAR_TRAVEL
 import com.poi.homelab.feature.calendar.CalendarEntry
 import com.poi.homelab.feature.calendar.CalendarEntryInput
@@ -573,13 +575,14 @@ class AgentTools(
     @Tool(
         name = "save_calendar_entry",
         description = "新增或修改一条日历记录。id 为空表示新增；修改时先用 list_calendar_entries 查 id。" +
-            "type 只允许 travel（旅行）或 important（重要）。",
+            "type 只允许 travel（旅行）、important（重要）、anniversary（纪念日/生日）、todo（待办/提醒）。",
     )
     suspend fun saveCalendarEntry(
         @Param("日期 yyyy-MM-dd") date: String,
         @Param("标题，例如：发薪日、去京都看枫叶") title: String,
         @Param("要修改的记录 id；新增留空") id: Int? = null,
-        @Param("类型：travel 旅行 / important 重要，默认 important") type: String? = null,
+        @Param("类型：travel 旅行 / important 重要 / anniversary 纪念日 / todo 待办，默认 important")
+        type: String? = null,
         @Param("地点，旅行时填写") location: String? = null,
         @Param("备注") note: String? = null,
     ): Map<String, Any?> = safely {
@@ -620,7 +623,8 @@ class AgentTools(
     @Tool(
         name = "create_calendar_entries",
         description = "批量新增日历记录。entries_json 必须是 JSON 数组字符串，每项包含 date(yyyy-MM-dd)、" +
-            "title、type(travel/important)、location、note。适合发薪日、假期等一次写多条的场景。",
+            "title、type(travel/important/anniversary/todo)、location、note。" +
+            "适合发薪日、假期等一次写多条的场景。",
     )
     suspend fun createCalendarEntries(
         @Param(
@@ -693,8 +697,11 @@ class AgentTools(
         "date" to date,
         "title" to title,
         "type" to type,
+        "time" to time,
         "location" to location,
         "note" to note,
+        "reminder" to reminder,
+        "done" to done,
     )
 
     @Tool(
@@ -780,10 +787,17 @@ class AgentTools(
 
     private fun normalizeCalendarType(type: String?): String {
         val value = type?.trim()?.lowercase().orEmpty()
-        return if (value.contains("travel") || value.contains("旅行") || value.contains("旅游")) {
-            CALENDAR_TRAVEL
-        } else {
-            CALENDAR_IMPORTANT
+        return when {
+            value.contains("travel") || value.contains("旅行") || value.contains("旅游") ->
+                CALENDAR_TRAVEL
+
+            value.contains("anniv") || value.contains("纪念") || value.contains("生日") ->
+                CALENDAR_ANNIVERSARY
+
+            value.contains("todo") || value.contains("待办") || value.contains("提醒") ->
+                CALENDAR_TODO
+
+            else -> CALENDAR_IMPORTANT
         }
     }
 
