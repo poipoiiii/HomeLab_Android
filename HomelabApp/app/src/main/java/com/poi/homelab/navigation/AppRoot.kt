@@ -139,6 +139,9 @@ private enum class Tab(
     Settings("设置", R.drawable.ic_settings),
 }
 
+/** 依赖家里 Lab Tools / 账本服务的页面，脱机时没有可看的数据。 */
+private fun Tab.needsLab(): Boolean = this == Tab.Services || this == Tab.Bills
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomelabApp(viewModel: MainViewModel) {
@@ -537,10 +540,12 @@ private fun HomelabDrawer(
                 }
             }
             Spacer(Modifier.height(14.dp))
+            val offline = state.labReachability?.online == false
             Tab.entries.forEach { tab ->
                 DrawerRow(
                     tab = tab,
                     active = tab == screen,
+                    enabled = !offline || !tab.needsLab(),
                     onClick = { onSelect(tab) },
                 )
             }
@@ -565,11 +570,11 @@ private fun HomelabDrawer(
 }
 
 @Composable
-private fun DrawerRow(tab: Tab, active: Boolean, onClick: () -> Unit) {
-    val tint = if (active) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+private fun DrawerRow(tab: Tab, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val tint = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+        active -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(
         modifier = Modifier
@@ -577,9 +582,13 @@ private fun DrawerRow(tab: Tab, active: Boolean, onClick: () -> Unit) {
             .padding(top = 2.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(
-                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.11f) else Color.Transparent,
+                if (active && enabled) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.11f)
+                } else {
+                    Color.Transparent
+                },
             )
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -593,8 +602,20 @@ private fun DrawerRow(tab: Tab, active: Boolean, onClick: () -> Unit) {
         Text(
             text = tab.label,
             style = MaterialTheme.typography.bodyLarge,
-            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            color = when {
+                !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                active -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurface
+            },
         )
+        if (!enabled) {
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "脱机不可用",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+        }
     }
 }
 

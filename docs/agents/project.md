@@ -22,7 +22,7 @@
 
 ## 导航与全局外观
 
-- 导航：不再用底部导航。左上角头像（总览页复用标题头像，其余页面顶部单独一行）打开左侧 `HomelabDrawer`，抽屉里有全部页面入口和「今日清单」；返回键在非总览页先回总览，只有在总览页连按两次才退出。
+- 导航：不再用底部导航。左上角头像（总览页复用标题头像，其余页面顶部单独一行）打开左侧 `HomelabDrawer`，抽屉里有全部页面入口和「今日清单」；返回键在非总览页先回总览，只有在总览页连按两次才退出。脱机时（`UiState.labReachability` 不是 Online）服务 / 账单两项置灰并标「脱机不可用」，不能点进去；总览、日历、小砂糖、下载、设置仍然可用。
 - 首页壁纸：资源 `res/drawable-nodpi/home_wallpaper.webp`（源 `static/pictures/4.jpeg`，文件实际是 WebP）。是否显示与参数存 `AppSettings.showWallpaper` / `wallpaperOpacity`（0.05..0.9，默认 0.22）/ `wallpaperDim`（0..0.8，默认 0.5）。壁纸是全局的：由 `AppRoot.WallpaperBackdrop` 铺在所有页面（含 AI 配置页）之后，`Scaffold` 用透明底色；不要再在单个页面里画壁纸。卡片与左侧导航抽屉统一用 `CardSurfaceAlpha`（0.78，`core/ui/theme/Color.kt`）透出背景。设置页「外观与首页」卡片提供开关与两个滑杆；`showLedgerOnHome` 控制首页是否展示账本区。
 - 启动动效：`core/ui/components/LaunchSplash.kt`，由 `MainActivity` 包裹主界面。启动页支持全屏「轻触跳过」，3 秒后自动结束；遮罩淡出时用 `contentAlpha`（650ms）让主界面内容从透明缓缓浮现。
 

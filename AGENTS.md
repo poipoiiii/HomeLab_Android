@@ -77,6 +77,7 @@ $env:TMP = $env:TEMP
 | 通知短信采集 / 账单导入 / 余额待确认 | [bills.md](docs/agents/bills.md) |
 | 无障碍自动化 / 开屏跳过 / 跳转守卫 | [automation.md](docs/agents/automation.md) |
 | 文件洞察 | [files.md](docs/agents/files.md) |
+| Anywear / Decart 虚拟试衣（规划中，未接入） | [tryon.md](docs/agents/tryon.md) |
 | 构建 / 安装 / Gradle / Android Studio / adb / Live Edit / 排错 | [build.md](docs/agents/build.md) |
 
 ## 7. 维护约定
