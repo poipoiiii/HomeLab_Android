@@ -234,6 +234,7 @@ curl -s http://127.0.0.1:8188/system_stats
 ```
 
 - 数据目录：`/home/ubuntu/img-edit/data`（结果/输入缩略图/SQLite）。清理策略由网关定时执行，也可手工删 `results/` 里的旧文件。
+- **省显存**：ComfyUI 已接入电源面板（`宿主机服务` 组里的 `comfyui.service`），不用修图时可以在面板里停掉，释放约 16GB 显存；下次出图前先启动，首次出图会重新加载模型（3–5 分钟）。网关本身很轻，不建议停。
 - `~/ComfyUI/output/img_edit/` 会累积每次出图的原图，ComfyUI 不自动清理，定期删。
 - 更换量化档（Q4→Q6/Q8）只改 `COMFY_UNET` 并放模型，然后重启网关；显存不够会明显变慢或 OOM。
 
