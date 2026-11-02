@@ -18,6 +18,7 @@ from PIL import Image
 import backend as backend_module
 from imageops import ImageError, decode_inputs
 from jobs import JobManager
+from prompts import optimizer
 from schemas import (
     BatchAck,
     BatchAckJob,
@@ -42,7 +43,7 @@ MAX_QUEUE = int(os.getenv("MAX_QUEUE", "12"))
 MAX_BATCH = int(os.getenv("MAX_BATCH", "8"))
 MAX_INPUT_MB = int(os.getenv("MAX_INPUT_MB", "20"))
 MAX_SIDE = int(os.getenv("MAX_SIDE", "2048"))
-JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT_SECONDS", "240"))
+JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT_SECONDS", "1200"))
 SYNC_WAIT = int(os.getenv("SYNC_WAIT_SECONDS", "240"))
 RESULT_TTL_HOURS = int(os.getenv("RESULT_TTL_HOURS", "168"))
 JOB_RETENTION_DAYS = int(os.getenv("JOB_RETENTION_DAYS", "30"))
@@ -119,7 +120,8 @@ async def health() -> HealthOut:
     state = backend.status()
     if state.startswith("failed"):
         status = "degraded"
-    elif state in {"warming_up", "running"}:
+    elif state in {"warming_up", "running", "sleeping"}:
+        # sleeping = 闲置定时器停了 ComfyUI，提交任务会自动唤醒
         status = "warming_up"
     else:
         status = "ok"
@@ -150,6 +152,16 @@ async def models() -> dict:
 
 
 # ---------------------------------------------------------------- 创建任务
+@app.post("/v1/prompts/optimize", dependencies=auth)
+async def optimize_prompt(payload: dict) -> dict:
+    """调试用：返回本地小模型改写后的提示词；未启用时原样返回。"""
+    prompt = str((payload or {}).get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, detail="prompt 不能为空")
+    optimized = await asyncio.to_thread(optimizer.optimize, prompt)
+    return {"enabled": optimizer.enabled, "prompt": optimized, "changed": optimized != prompt}
+
+
 def _prepare(request: JobRequest):
     inputs = decode_inputs(request.images, MAX_INPUT_MB)
     return inputs
@@ -218,7 +230,7 @@ async def list_jobs(
 ) -> JobsPage:
     rows = storage.list(status, limit, cursor)
     jobs = [manager.to_out(row) for row in rows]
-    next_cursor = rows[-1]["rowid"] if len(rows) == limit else None
+    next_cursor = rows[-1]["created_at"] if len(rows) == limit else None
     return JobsPage(jobs=jobs, next_cursor=next_cursor)
 
 
@@ -231,13 +243,21 @@ async def get_job(job_id: str) -> JobOut:
 
 
 @app.delete("/v1/jobs/{job_id}", dependencies=auth)
-async def cancel_job(job_id: str) -> Response:
-    code, status = manager.cancel(job_id)
-    if code == 404:
+async def cancel_or_delete_job(job_id: str) -> Response:
+    row = storage.get(job_id)
+    if row is None:
         raise HTTPException(404, detail="job 不存在")
-    if code == 409:
-        raise HTTPException(409, detail="job_finished")
-    return JSONResponse({"id": job_id, "status": status}, status_code=code)
+    # 排队中/运行中：保持原来的取消语义
+    if row["status"] in {"queued", "running", "cancel_requested"}:
+        code, status = manager.cancel(job_id)
+        if code == 404:
+            raise HTTPException(404, detail="job 不存在")
+        if code == 409:
+            raise HTTPException(409, detail="job_finished")
+        return JSONResponse({"id": job_id, "status": status}, status_code=code)
+    # 已结束：从历史里彻底删除（记录 + 结果图 + 缩略图）
+    storage.delete(job_id)
+    return JSONResponse({"id": job_id, "status": "deleted"})
 
 
 # ---------------------------------------------------------------- 文件

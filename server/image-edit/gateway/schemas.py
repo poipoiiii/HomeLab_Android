@@ -13,8 +13,7 @@ MAX_BATCH = 8
 
 
 class ImageIn(BaseModel):
-    # 老客户端可能省略 mime；默认按 JPEG 处理，避免无意义的 422。
-    mime: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|jpg|png|webp)$")
+    mime: str = Field(pattern=r"^image/(jpeg|jpg|png|webp)$")
     b64: str = Field(min_length=16)
 
 

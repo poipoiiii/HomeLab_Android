@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from backend import Backend
 from imageops import Input, choose_size, parse_size, to_png
+from prompts import optimizer
 from schemas import JobOut, JobRequest
 from storage import Storage, input_thumbs
 
@@ -200,6 +201,9 @@ class JobManager:
             return
         started = int(time.time())
         self.storage.patch(item.job_id, status="running", stage="running", started_at=started)
+        prompt = await asyncio.to_thread(optimizer.optimize, item.prompt)
+        if prompt != item.prompt:
+            log.info("提示词优化 %s：%d 字 → %d 字", item.job_id, len(item.prompt), len(prompt))
         width, height = parse_size(
             item.size,
             item.inputs[0].width,
@@ -212,7 +216,7 @@ class JobManager:
                 asyncio.to_thread(
                     self.backend.generate,
                     [i.pil for i in item.inputs],
-                    item.prompt,
+                    prompt,
                     steps=item.steps,
                     guidance=item.guidance,
                     negative=item.negative,

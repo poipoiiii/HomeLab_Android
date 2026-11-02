@@ -1,0 +1,10 @@
+[Unit]
+Description=Check ComfyUI idle state every minute
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1min
+Unit=img-edit-comfy-idle.service
+
+[Install]
+WantedBy=timers.target

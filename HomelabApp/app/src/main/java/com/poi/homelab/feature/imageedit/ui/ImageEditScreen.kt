@@ -19,9 +19,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +65,7 @@ fun ImageEditScreen(
     onRefreshJobs: () -> Unit,
     onCancelJob: (String) -> Unit,
     onSaveJob: (String) -> Unit,
+    onDeleteJob: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -72,6 +75,7 @@ fun ImageEditScreen(
     var picked by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var instruction by rememberSaveable { mutableStateOf("") }
     var presetId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDelete by rememberSaveable { mutableStateOf<String?>(null) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(8),
@@ -243,11 +247,38 @@ fun ImageEditScreen(
                             thumb = thumbUrl(job.thumbUrl.orEmpty()),
                             onCancel = { onCancelJob(job.id) },
                             onSave = { onSaveJob(job.id) },
+                            onDelete = { pendingDelete = job.id },
                         )
                     }
                 }
             }
         }
+    }
+
+    pendingDelete?.let { jobId ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除这条任务？") },
+            text = {
+                Text(
+                    "服务端的记录、结果图和缩略图会一起删除；已经保存到相册的副本不受影响。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDelete = null
+                        onDeleteJob(jobId)
+                    },
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
     }
 }
 
@@ -257,6 +288,7 @@ private fun JobCard(
     thumb: String?,
     onCancel: () -> Unit,
     onSave: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val context = LocalContext.current
     CreamCard {
@@ -303,7 +335,7 @@ private fun JobCard(
             )
         }
 
-        if (job.active || job.succeeded) {
+        if (job.active || job.succeeded || job.status == "failed" || job.status == "canceled") {
             ThinDivider(Modifier.padding(vertical = 10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (job.active) {
@@ -311,6 +343,9 @@ private fun JobCard(
                 }
                 if (job.succeeded) {
                     InlineAction("保存到相册", onSave)
+                }
+                if (!job.active) {
+                    InlineAction("删除", onDelete, color = MaterialTheme.colorScheme.error)
                 }
             }
         }

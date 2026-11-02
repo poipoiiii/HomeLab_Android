@@ -3033,6 +3033,30 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
         }
     }
 
+    /** 删除已结束的历史任务；服务端结果图与缩略图一并清掉。 */
+    fun deleteImageEditJob(jobId: String) {
+        val settings = _state.value.settings
+        viewModelScope.launch {
+            runCatching { app.imageEdit.remove(settings, jobId) }
+                .onSuccess {
+                    _state.update { current ->
+                        val jobs = current.imageEdit.jobs.filterNot { it.id == jobId }
+                        current.copy(
+                            imageEdit = current.imageEdit.copy(
+                                jobs = jobs,
+                                activeCount = jobs.count { it.active },
+                                error = null,
+                            ),
+                            message = "已删除任务",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(message = readable(error)) }
+                }
+        }
+    }
+
     fun saveImageEditJob(jobId: String) {
         val snapshot = _state.value
         val job = snapshot.imageEdit.jobs.firstOrNull { it.id == jobId } ?: return

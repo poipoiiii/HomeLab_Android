@@ -93,6 +93,16 @@ class Storage:
             )
             return cursor.rowcount
 
+    def delete(self, job_id: str) -> bool:
+        """彻底删除一条历史任务：数据库记录 + 结果图 / 缩略图。"""
+        with self.connect() as con:
+            row = con.execute("select id from jobs where id = ?", (job_id,)).fetchone()
+            if row is None:
+                return False
+            con.execute("delete from jobs where id = ?", (job_id,))
+        self._drop_files(job_id)
+        return True
+
     # ---------------------------------------------------------------- 查询
     def get(self, job_id: str) -> sqlite3.Row | None:
         with self.connect() as con:

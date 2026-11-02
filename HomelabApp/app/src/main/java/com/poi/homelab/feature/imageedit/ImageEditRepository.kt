@@ -122,6 +122,13 @@ class ImageEditRepository(
     suspend fun cancel(settings: AppSettings, jobId: String): ImageEditJob =
         client.cancel(settings.imageEditUrl, settings.imageEditToken, jobId)
 
+    /** 删除历史任务；服务端会一并清掉结果图与输入缩略图。 */
+    suspend fun remove(settings: AppSettings, jobId: String) {
+        requireConfigured(settings)
+        client.remove(settings.imageEditUrl, settings.imageEditToken, jobId)
+        store.forget(jobId)
+    }
+
     // ---------------------------------------------------------------- 保存
     suspend fun saveResult(settings: AppSettings, job: ImageEditJob): SavedEdit {
         val saved = store.savedIds()

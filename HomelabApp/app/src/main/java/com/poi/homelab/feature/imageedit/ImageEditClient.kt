@@ -99,6 +99,11 @@ class ImageEditClient(private val http: OkHttpClient, private val json: Json) {
             json.decodeFromString(call(baseUrl, token, "GET", "/v1/jobs/$id", null))
         }
 
+    /** 删除已结束的历史任务（记录 + 服务端结果与缩略图）。 */
+    suspend fun remove(baseUrl: String, token: String, id: String) = withContext(Dispatchers.IO) {
+        call(baseUrl, token, "DELETE", "/v1/jobs/$id", null)
+    }
+
     suspend fun download(baseUrl: String, token: String, path: String): ByteArray =
         withContext(Dispatchers.IO) {
             val request = Request.Builder()

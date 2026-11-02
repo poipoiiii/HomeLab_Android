@@ -1,0 +1,8 @@
+[Unit]
+Description=Stop ComfyUI after it has been idle (frees VRAM)
+After=comfyui.service
+
+[Service]
+Type=oneshot
+Environment=IDLE_MINUTES=30
+ExecStart=/usr/local/bin/img-edit-comfy-idle.sh

@@ -232,6 +232,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                 onRefreshJobs = viewModel::refreshImageEditJobs,
                 onCancelJob = viewModel::cancelImageEditJob,
                 onSaveJob = viewModel::saveImageEditJob,
+                onDeleteJob = viewModel::deleteImageEditJob,
                 onOpenSettings = viewModel::openImageEditSettings,
                 onClose = viewModel::closeImageEdit,
             )
