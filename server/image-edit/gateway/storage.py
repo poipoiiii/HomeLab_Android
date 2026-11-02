@@ -86,7 +86,7 @@ class Storage:
         now = int(time.time())
         with self.connect() as con:
             cursor = con.execute(
-                "update jobs set status='failed', finished_at=?, "
+                "update jobs set status='failed', stage='done', finished_at=?, "
                 "error_code='server_restarted', error_message='网关重启，任务已中止' "
                 "where status in ('queued','running','cancel_requested')",
                 (now,),
@@ -96,7 +96,7 @@ class Storage:
     # ---------------------------------------------------------------- 查询
     def get(self, job_id: str) -> sqlite3.Row | None:
         with self.connect() as con:
-            return con.execute("select * from jobs where id = ?", (job_id,)).fetchone()
+            return con.execute("select rowid, * from jobs where id = ?", (job_id,)).fetchone()
 
     def find_request(self, request_id: str, since: int) -> sqlite3.Row | None:
         with self.connect() as con:
@@ -121,12 +121,14 @@ class Storage:
             clause = "where status = ?"
             values.append(status)
         if cursor:
-            clause += (" and " if clause else "where ") + "created_at < ?"
+            # 用 rowid 而不是 created_at：批量任务常在同一秒创建，
+            # 按秒级时间戳翻页会漏掉同秒的记录。
+            clause += (" and " if clause else "where ") + "rowid < ?"
             values.append(cursor)
         values.append(limit)
         with self.connect() as con:
             return con.execute(
-                f"select * from jobs {clause} order by created_at desc limit ?", values
+                f"select rowid, * from jobs {clause} order by rowid desc limit ?", values
             ).fetchall()
 
     def queue_depth(self) -> tuple[int, int]:
@@ -141,8 +143,8 @@ class Storage:
             return 0
         with self.connect() as con:
             ahead = con.execute(
-                "select count(*) from jobs where status = 'queued' and created_at <= ? and id != ?",
-                (row["created_at"], job_id),
+                "select count(*) from jobs where status = 'queued' and rowid <= ? and id != ?",
+                (row["rowid"], job_id),
             ).fetchone()[0]
         return int(ahead)
 

@@ -94,10 +94,14 @@ fun ImageEditScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Pill("修图", tab == "edit", onClick = { tab = "edit" })
-            Pill("任务 ${jobs.count { it.active }.takeIf { it > 0 } ?: ""}".trim(), tab == "jobs") {
-                tab = "jobs"
-                onRefreshJobs()
-            }
+            Pill(
+                "任务 ${jobs.count { it.active }.takeIf { it > 0 } ?: ""}".trim(),
+                tab == "jobs",
+                onClick = {
+                    tab = "jobs"
+                    onRefreshJobs()
+                },
+            )
         }
 
         when (tab) {
@@ -159,10 +163,14 @@ fun ImageEditScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             items(IMAGE_EDIT_PRESETS) { preset ->
-                                Pill(preset.title, presetId == preset.id) {
-                                    presetId = preset.id
-                                    instruction = preset.prompt
-                                }
+                                Pill(
+                                    preset.title,
+                                    presetId == preset.id,
+                                    onClick = {
+                                        presetId = preset.id
+                                        instruction = preset.prompt
+                                    },
+                                )
                             }
                         }
                         OutlinedTextField(

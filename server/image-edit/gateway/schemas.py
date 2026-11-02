@@ -13,7 +13,8 @@ MAX_BATCH = 8
 
 
 class ImageIn(BaseModel):
-    mime: str = Field(pattern=r"^image/(jpeg|jpg|png|webp)$")
+    # 老客户端可能省略 mime；默认按 JPEG 处理，避免无意义的 422。
+    mime: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|jpg|png|webp)$")
     b64: str = Field(min_length=16)
 
 
@@ -76,7 +77,7 @@ class JobOut(BaseModel):
 
 class JobsPage(BaseModel):
     jobs: list[JobOut]
-    next_cursor: str | None = None
+    next_cursor: int | None = None
 
 
 class CreateAck(BaseModel):

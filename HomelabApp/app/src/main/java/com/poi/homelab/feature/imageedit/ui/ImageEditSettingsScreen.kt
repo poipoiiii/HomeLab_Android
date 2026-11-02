@@ -107,7 +107,7 @@ fun ImageEditSettingsScreen(
                 CreamCard {
                     Text("网关地址", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "家里 img-edit-gateway 的地址，例如 http://100.x.x.x:8091 或 http://192.168.1.10:8091。",
+                        "家里 img-edit-gateway 的地址，例如 http://100.x.x.x:8094 或 http://192.168.1.10:8094。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),

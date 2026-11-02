@@ -14,6 +14,9 @@ val localProperties = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 val defaultHomarrUrl = localProperties.getProperty("homarr.url").orEmpty().trim()
+// AI 修图默认连接家里网关：build 时从 local.properties 注入，仓库里不出现地址/Token。
+val defaultImageEditUrl = localProperties.getProperty("imageedit.url").orEmpty().trim()
+val defaultImageEditToken = localProperties.getProperty("imageedit.token").orEmpty().trim()
 
 android {
     namespace = "com.poi.homelab"
@@ -30,6 +33,8 @@ android {
         versionName = "1.0.0"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "DEFAULT_HOMARR_URL", "\"$defaultHomarrUrl\"")
+        buildConfigField("String", "DEFAULT_IMAGE_EDIT_URL", "\"$defaultImageEditUrl\"")
+        buildConfigField("String", "DEFAULT_IMAGE_EDIT_TOKEN", "\"$defaultImageEditToken\"")
     }
 
     signingConfigs {

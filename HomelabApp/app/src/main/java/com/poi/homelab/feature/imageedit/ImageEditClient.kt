@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -123,10 +124,12 @@ class ImageEditClient(private val http: OkHttpClient, private val json: Json) {
 
     // ---------------------------------------------------------------- 内部
     private fun url(baseUrl: String): HttpUrl {
-        val trimmed = baseUrl.trim().trimEnd('/')
-            .removeSuffix("/v1")
-            .removeSuffix("/jobs")
-            .trimEnd('/')
+        var trimmed = baseUrl.trim().trimEnd('/')
+        // 允许用户误填到具体接口：/v1/jobs/batch、/v1/jobs、/v1 都剥掉
+        listOf("/v1/jobs/batch", "/v1/jobs", "/v1", "/jobs").forEach { suffix ->
+            if (trimmed.endsWith(suffix)) trimmed = trimmed.removeSuffix(suffix)
+        }
+        trimmed = trimmed.trimEnd('/')
         if (trimmed.isBlank()) throw ImageEditException("not_configured", "还没有配置修图网关地址")
         return trimmed.toHttpUrlOrNull()
             ?: throw ImageEditException("bad_url", "修图网关地址格式不正确：$baseUrl")
@@ -164,9 +167,19 @@ class ImageEditClient(private val http: OkHttpClient, private val json: Json) {
         val errorCode = (nested?.get("code") as? JsonPrimitive)?.contentOrNull
             ?: (parsed?.get("code") as? JsonPrimitive)?.contentOrNull
             ?: fallbackCode(code)
+        val detail = parsed?.get("detail")
+        val validation = (detail as? JsonArray)?.firstOrNull()
+            ?.let { runCatching { it.jsonObject }.getOrNull() }
         val message = (nested?.get("message") as? JsonPrimitive)?.contentOrNull
             ?: (parsed?.get("message") as? JsonPrimitive)?.contentOrNull
-            ?: (parsed?.get("detail") as? JsonPrimitive)?.contentOrNull
+            ?: (detail as? JsonPrimitive)?.contentOrNull
+            ?: validation?.let {
+                val location = (it["loc"] as? JsonArray)?.joinToString(".") {
+                    (it as? JsonPrimitive)?.contentOrNull.orEmpty()
+                }.orEmpty()
+                val text = (it["msg"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                "参数不合法：$location $text".trim()
+            }
             ?: readable(code, body)
         return ImageEditException(errorCode, message, code)
     }

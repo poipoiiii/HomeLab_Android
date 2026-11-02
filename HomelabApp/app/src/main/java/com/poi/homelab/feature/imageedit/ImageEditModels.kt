@@ -6,7 +6,9 @@ import kotlinx.serialization.Serializable
 /** 提交给网关的单张参考图，[b64] 是不带 data URI 前缀的纯 base64。 */
 @Serializable
 data class ImageEditInput(
-    val mime: String = "image/jpeg",
+    // 不设默认值：kotlinx.serialization 默认不编码等于默认值的字段，
+    // 会把 mime 省掉导致服务端 422。
+    val mime: String,
     val b64: String,
 )
 

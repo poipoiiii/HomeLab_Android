@@ -270,6 +270,8 @@ CFG 固定 1.0：该系列是 guidance-distilled，套 SD 的 7.5 会过曝；�
 | --- | --- |
 | 启动报 `unable to open database file` | `chown -R ubuntu:ubuntu /home/ubuntu/img-edit/data` |
 | `/health` 显示 `failed: All connection attempts failed` | ComfyUI 没起：`systemctl status comfyui` |
+| 任务失败 `backend_error`，消息是 `连不上 ComfyUI` / `Connection refused` | 提交时 ComfyUI 没起或正在重启：`systemctl status comfyui`，恢复后重试即可 |
+| 任务失败 `server_restarted` | 网关重启时任务还在跑；重新提交一次 |
 | `/health` 偶尔 `failed: timed out` / `degraded` | 出图时 ComfyUI 主线程忙，`/system_stats` 超时；空闲会恢复，不是故障 |
 | `torch.cuda.is_available()` 为 False | 忘记 `LD_PRELOAD` 或 torch 版本不对（需 2.10+rocm7.0） |
 | `import torch` 报 Bus error | torch 6.2 轮子与系统 ROCm 7.2 混用，重装 rocm7.0 版本 |

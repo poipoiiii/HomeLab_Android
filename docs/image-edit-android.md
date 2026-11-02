@@ -26,6 +26,8 @@
 
 ## 3. 首次配置
 
+当前构建已从 `HomelabApp/local.properties` 的 `imageedit.url` / `imageedit.token` 注入默认网关地址和 Token，装好即可用；只有在换服务器、换 Token 或主动清空后，才需要进设置页手动修改。
+
 设置 → 小砂糖 → AI 修图 → 服务设置：
 
 | 项 | 默认 | 说明 |

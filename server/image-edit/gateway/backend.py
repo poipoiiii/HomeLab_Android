@@ -227,26 +227,29 @@ class ComfyUIBackend:
     def generate(self, images, prompt, *, steps, guidance, negative, seed, width, height):
         seed_value = int(seed) if seed is not None else random.randint(0, 2**31 - 1)
         timeout = httpx.Timeout(120.0, connect=10.0)
-        with httpx.Client(base_url=self.url, timeout=timeout) as client:
-            refs = [self._upload(client, image, index) for index, image in enumerate(images[:3])]
-            workflow = self._workflow(
-                prompt=prompt,
-                refs=refs,
-                steps=int(steps),
-                guidance=float(guidance),
-                seed=seed_value,
-                width=int(width),
-                height=int(height),
-            )
-            response = client.post(
-                "/prompt",
-                json={"prompt": workflow, "client_id": self.client_id},
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(f"ComfyUI 拒绝了任务：{response.text[:300]}")
-            prompt_id = response.json()["prompt_id"]
-            log.info("ComfyUI 任务 %s（%dx%d, steps=%d, seed=%d）", prompt_id, width, height, steps, seed_value)
-            return self._wait(client, prompt_id)
+        try:
+            with httpx.Client(base_url=self.url, timeout=timeout) as client:
+                refs = [self._upload(client, image, index) for index, image in enumerate(images[:3])]
+                workflow = self._workflow(
+                    prompt=prompt,
+                    refs=refs,
+                    steps=int(steps),
+                    guidance=float(guidance),
+                    seed=seed_value,
+                    width=int(width),
+                    height=int(height),
+                )
+                response = client.post(
+                    "/prompt",
+                    json={"prompt": workflow, "client_id": self.client_id},
+                )
+                if response.status_code >= 400:
+                    raise RuntimeError(f"ComfyUI 拒绝了任务：{response.text[:300]}")
+                prompt_id = response.json()["prompt_id"]
+                log.info("ComfyUI 任务 %s（%dx%d, steps=%d, seed=%d）", prompt_id, width, height, steps, seed_value)
+                return self._wait(client, prompt_id)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as error:
+            raise RuntimeError(f"连不上 ComfyUI（{self.url}），检查 comfyui.service 是否在运行") from error
 
     def _upload(self, client: httpx.Client, image: Image.Image, index: int) -> dict:
         buffer = io.BytesIO()

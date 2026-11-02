@@ -218,7 +218,7 @@ async def list_jobs(
 ) -> JobsPage:
     rows = storage.list(status, limit, cursor)
     jobs = [manager.to_out(row) for row in rows]
-    next_cursor = rows[-1]["created_at"] if len(rows) == limit else None
+    next_cursor = rows[-1]["rowid"] if len(rows) == limit else None
     return JobsPage(jobs=jobs, next_cursor=next_cursor)
 
 
