@@ -78,6 +78,7 @@ $env:TMP = $env:TEMP
 | AI / 对话 / 工具 / prompt / 模型 / Markdown / 日历 / 权限与隐私约束 | [ai.md](docs/agents/ai.md) |
 | AI 修图（手机端入口、配置、模式、对话工具、构建排错） | [image-edit-android.md](docs/image-edit-android.md) |
 | AI 修图服务端（网关、模型、API、运维调参） | [server/image-edit/README.md](server/image-edit/README.md) |
+| 视频生成（AI 导演、方案确认、任务轮询、手动表单、服务端接口） | [motion.md](docs/agents/motion.md) |
 | 照片 / Cloudreve 上传 / 自动同步 | [photos.md](docs/agents/photos.md) |
 | 通知短信采集 / 账单导入 / 余额待确认 | [bills.md](docs/agents/bills.md) |
 | 无障碍自动化 / 开屏跳过 / 跳转守卫 | [automation.md](docs/agents/automation.md) |

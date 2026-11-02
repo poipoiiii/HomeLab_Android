@@ -558,6 +558,52 @@ class DeviceTools(private val context: Context) {
         return uri.toString()
     }
 
+    /** 保存视频到应用专属 Movies 目录，Android 10+ 同时写入相册 Movies/HomelabMotion。 */
+    suspend fun saveVideo(bytes: ByteArray, extension: String = "mp4"): JsonObject =
+        withContext(Dispatchers.IO) {
+            val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "motion")
+            if (!dir.exists() && !dir.mkdirs()) {
+                throw IllegalStateException("无法创建视频目录：${dir.absolutePath}")
+            }
+            val name = "motion_" +
+                SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date()) + "." + extension
+            val file = File(dir, name)
+            file.writeBytes(bytes)
+            val gallery = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                insertVideoToGallery(name, bytes)
+            } else {
+                null
+            }
+            buildJsonObject {
+                put("path", file.absolutePath)
+                put("size_kb", file.length() / 1024)
+                put("gallery_uri", gallery ?: "")
+            }
+        }
+
+    private fun insertVideoToGallery(name: String, bytes: ByteArray): String? {
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, name)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/HomelabMotion")
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val resolver = context.contentResolver
+        val uri = runCatching {
+            resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        }.getOrNull() ?: return null
+        runCatching {
+            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+        }.onFailure {
+            resolver.delete(uri, null, null)
+            return null
+        }
+        values.clear()
+        values.put(MediaStore.Video.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return uri.toString()
+    }
+
     private fun sampleSize(width: Int, height: Int, maxSide: Int): Int {
         var sample = 1
         val longest = maxOf(width, height)

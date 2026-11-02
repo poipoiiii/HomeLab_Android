@@ -121,6 +121,7 @@ import com.poi.homelab.feature.lab.ui.DownloadsScreen
 import com.poi.homelab.feature.lab.ui.ServicesScreen
 import com.poi.homelab.feature.market.ui.MarketIntradaySheet
 import com.poi.homelab.feature.market.ui.MarketScreen
+import com.poi.homelab.feature.motion.ui.MotionScreen
 import com.poi.homelab.feature.settings.ui.SettingsScreen
 import com.poi.homelab.feature.watch.ui.WatchScreen
 import com.poi.homelab.R
@@ -138,6 +139,7 @@ private enum class Tab(
     Watch("监控", R.drawable.ic_watch),
     Ai("小砂糖", R.drawable.ic_ai),
     Downloads("下载", R.drawable.ic_download),
+    Motion("视频", R.drawable.ic_motion),
     Settings("设置", R.drawable.ic_settings),
 }
 
@@ -379,6 +381,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     state = state,
                     onSubmit = viewModel::submitDownload,
                 )
+                Tab.Motion -> MotionScreen()
                 Tab.Settings -> SettingsScreen(
                     state = state,
                     onSave = viewModel::saveSettings,
