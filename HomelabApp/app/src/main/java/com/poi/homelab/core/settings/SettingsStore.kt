@@ -53,6 +53,13 @@ data class AppSettings(
     val photoSyncDays: Int = 3,
     /** 单次最多上传张数（1..500）。 */
     val photoSyncLimit: Int = 200,
+    /** AI 修图网关地址，空 = 未启用；图片只发给家里这台网关。 */
+    val imageEditUrl: String = "",
+    val imageEditToken: String = "",
+    val imageEditModel: String = "Qwen/Qwen-Image-Edit-2511",
+    val imageEditSteps: Int = 24,
+    val imageEditMaxSide: Int = 1536,
+    val imageEditAutoSave: Boolean = true,
     val token: String = "",
     val deviceName: String = Build.MODEL.orEmpty(),
     val themeMode: String = "system",
@@ -92,6 +99,12 @@ class SettingsStore(private val context: Context) {
         val PHOTO_SYNC_HOUR = intPreferencesKey("photo_sync_hour")
         val PHOTO_SYNC_DAYS = intPreferencesKey("photo_sync_days")
         val PHOTO_SYNC_LIMIT = intPreferencesKey("photo_sync_limit")
+        val IMAGE_EDIT_URL = stringPreferencesKey("image_edit_url")
+        val IMAGE_EDIT_TOKEN = stringPreferencesKey("image_edit_token")
+        val IMAGE_EDIT_MODEL = stringPreferencesKey("image_edit_model")
+        val IMAGE_EDIT_STEPS = intPreferencesKey("image_edit_steps")
+        val IMAGE_EDIT_MAX_SIDE = intPreferencesKey("image_edit_max_side")
+        val IMAGE_EDIT_AUTO_SAVE = booleanPreferencesKey("image_edit_auto_save")
         val TOKEN = stringPreferencesKey("api_token")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -138,6 +151,13 @@ class SettingsStore(private val context: Context) {
                 photoSyncHour = (prefs[Keys.PHOTO_SYNC_HOUR] ?: 3).coerceIn(0, 23),
                 photoSyncDays = (prefs[Keys.PHOTO_SYNC_DAYS] ?: 3).coerceIn(1, 30),
                 photoSyncLimit = (prefs[Keys.PHOTO_SYNC_LIMIT] ?: 200).coerceIn(1, 500),
+                imageEditUrl = prefs[Keys.IMAGE_EDIT_URL].orEmpty(),
+                imageEditToken = prefs[Keys.IMAGE_EDIT_TOKEN].orEmpty(),
+                imageEditModel = prefs[Keys.IMAGE_EDIT_MODEL]?.takeIf { it.isNotBlank() }
+                    ?: "Qwen/Qwen-Image-Edit-2511",
+                imageEditSteps = (prefs[Keys.IMAGE_EDIT_STEPS] ?: 24).coerceIn(20, 60),
+                imageEditMaxSide = (prefs[Keys.IMAGE_EDIT_MAX_SIDE] ?: 1536).coerceIn(768, 2048),
+                imageEditAutoSave = prefs[Keys.IMAGE_EDIT_AUTO_SAVE] ?: true,
                 token = prefs[Keys.TOKEN].orEmpty(),
                 deviceName = prefs[Keys.DEVICE_NAME] ?: Build.MODEL.orEmpty(),
                 themeMode = prefs[Keys.THEME_MODE] ?: "system",
@@ -191,6 +211,12 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.PHOTO_SYNC_HOUR] = value.photoSyncHour.coerceIn(0, 23)
             prefs[Keys.PHOTO_SYNC_DAYS] = value.photoSyncDays.coerceIn(1, 30)
             prefs[Keys.PHOTO_SYNC_LIMIT] = value.photoSyncLimit.coerceIn(1, 500)
+            prefs[Keys.IMAGE_EDIT_URL] = value.imageEditUrl.trim().trimEnd('/')
+            prefs[Keys.IMAGE_EDIT_TOKEN] = value.imageEditToken.trim()
+            prefs[Keys.IMAGE_EDIT_MODEL] = value.imageEditModel.trim()
+            prefs[Keys.IMAGE_EDIT_STEPS] = value.imageEditSteps.coerceIn(20, 60)
+            prefs[Keys.IMAGE_EDIT_MAX_SIDE] = value.imageEditMaxSide.coerceIn(768, 2048)
+            prefs[Keys.IMAGE_EDIT_AUTO_SAVE] = value.imageEditAutoSave
             prefs[Keys.TOKEN] = value.token.trim()
             prefs[Keys.DEVICE_NAME] = value.deviceName.trim()
             prefs[Keys.THEME_MODE] = value.themeMode

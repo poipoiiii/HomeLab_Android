@@ -27,6 +27,16 @@
 - `describe_photo` 用 ADK `ChatCompletions` + `Part.inlineData`（`Blob`）；`generate_image` 仍走 `AiClient.generateImage`，因为 ADK 不覆盖 `/v1/images/generations`。`AiProvider.visionModel` / `imageModel` 单独配置；DeepSeek 未填识图模型时默认 `deepseek-flash`。
 - `generate_image` 有成本：只有用户明确要求出图才调用；只要提示词就停在 `describe_photo`。
 
+## 家里修图（Qwen-Image-Edit-2511）
+
+- 上手文档：手机端 [image-edit-android.md](../image-edit-android.md)，服务端 [server/image-edit/README.md](../../server/image-edit/README.md)；接口与实测数据见 [image-edit-design.md](../image-edit-design.md)。
+- `feature/imageedit/`：`ImageEditClient`（HTTP）→ `ImageEditRepository`（压缩、提交、轮询、保存相册、Cloudreve）→ `ImageEditStore`（`saved_job_ids`，避免重复写相册）。服务端在 `server/image-edit/gateway`（FastAPI + SQLite job，异步 job + 队列），设计见 `docs/image-edit-design.md`。
+- 工具：`edit_photo`（1–3 张参考图，等结果并保存）、`batch_edit_photos`（2–8 张，只提交）、`list_image_edit_jobs`（只读）、`save_image_edit_result`（补存）。不要用 `generate_image` 假装修图。
+- 独立页 `feature/imageedit/ui/ImageEditScreen.kt`（修图/任务两个 tab）与 `ImageEditSettingsScreen.kt`（地址、Token、模型、步数、最长边、自动保存、测试连接）；入口在设置页「小砂糖」分组、首页快捷面板、AI 页空状态，`AppRoot` 用 `state.imageEdit.open / settingsOpen` 做全屏 overlay。
+- 配置项 `imageEditUrl / imageEditToken / imageEditModel / imageEditSteps / imageEditMaxSide / imageEditAutoSave`，Token 只存本机 DataStore；图片只发给家里的网关，不经过对话服务商。
+- Coil 加载结果/输入缩略图时带不上 `Authorization` 头，`ImageEditRepository.thumbUrl` 会把 `?token=` 拼进 URL；服务端两个图片接口都接受 query token。
+
+
 ## 对话记录与 Markdown
 
 - `ChatMessage` 定义在 `feature/ai/AiModels.kt`，由 `feature/ai/ChatStore.kt` 持久化（DataStore 文件 `homelab_chat`，`AppContainer.chat`，最多 200 条）；ADK 的 `InMemorySessionService` 只在内存中，进程重启后首次发送会用已保存记录重建会话。清空对话时要同时清 DataStore 并调用 `AiAgent.clearHistory()` 删除 ADK 会话。

@@ -10,6 +10,7 @@ Kotlin + Jetpack Compose 单模块工程，包名 `com.poi.homelab`，应用名 
 - **账本**：月度概览、分类/商户统计、流水筛选；支持多选截图或 CSV/XLSX 导入，先由 bill-ai 服务识图提取，再在手机端核对、编辑并整批提交。
 - **日历**：旅行 / 重要事项的月视图，可增删改；同时作为 AI 的私人日历工具后端。
 - **小砂糖（AI）**：基于 Google ADK for Kotlin，支持 DeepSeek / OpenAI / Moonshot / 通义千问 / 硅基流动 / Ollama / 自定义 OpenAI 兼容地址；支持对话持久化、识图、生图、追问建议，以及工具调用（见下）。
+- **AI 修图**：独立修图页（单张 / 多图合成 / 批量）+ 对话里直接改照片，走家里自建的 `img-edit-gateway`（Qwen-Image-Edit-2511，ComfyUI + GGUF），结果自动保存到相册；图片只发给家里的服务器，不经过第三方 AI。
 - **服务与下载**：通过 MCP 调用 Lab Tools，查看健康快照、容器列表、启停/重启、日志与磁盘占用；提交下载任务并查看结果。
 - **记账采集**：通知监听 + 银行短信解析，写入本地 Outbox 后重试上报到账本服务。
 - **照片**：相册搜索/识别/生图结果展示；最近照片上传到 Cloudreve（WebDAV），可用 JobScheduler 每天自动同步最近 3 天。
@@ -17,9 +18,9 @@ Kotlin + Jetpack Compose 单模块工程，包名 `com.poi.homelab`，应用名 
 
 ### AI 工具集
 
-`@Tool` 函数由 KSP 在编译期生成 schema，覆盖：系统与存储信息、应用列表、使用时长/存储排行、SAF 目录文件搜索、Homelab 健康与账本流水、照片查找/识别/生图/上传、私人日历读写，以及无障碍界面自动化（读当前窗口、点击、输入、滚动、等待）。
+`@Tool` 函数由 KSP 在编译期生成 schema，覆盖：系统与存储信息、应用列表、使用时长/存储排行、SAF 目录文件搜索、Homelab 健康与账本流水、照片查找/识别/生图/上传、家里修图（`edit_photo` / `batch_edit_photos` / `list_image_edit_jobs` / `save_image_edit_result`）、私人日历读写，以及无障碍界面自动化（读当前窗口、点击、输入、滚动、等待）。
 
-写操作只有四类：把生成的图片存进相册、增删改私人日历、按明确要求操作其他应用界面、把指定的照片上传到 Cloudreve；其余查询默认只读。
+写操作只有四类：把生成的图片（含修图结果）存进相册、增删改私人日历、按明确要求操作其他应用界面、把指定的照片上传到 Cloudreve；其余查询默认只读。
 
 ## 技术栈
 
@@ -46,6 +47,7 @@ HomelabApp/
     │   ├── calendar/   私人日历
     │   ├── homarr/     Homarr 看板与磁贴
     │   ├── home/       首页、待办、每日清单
+    │   ├── imageedit/  AI 修图：Client / Repository / 独立页 / 服务设置
     │   ├── lab/        MCP 客户端与容器/下载
     │   ├── photos/     Cloudreve WebDAV 与照片自动同步
     │   ├── settings/   设置页
@@ -75,7 +77,7 @@ HomelabApp/
    powershell -ExecutionPolicy Bypass -File .\apply-to-phone.ps1
    ```
 
-   脚本会依次调用 `gradlew installDebug`、`adb shell am force-stop com.poi.homelab`、`adb shell am start -n com.poi.homelab/.MainActivity`。
+   脚本会依次调用 `gradlew installDebug`、`adb shell am force-stop com.poi.homelab`、`adb shell am start -n com.poi.homelab/.MainActivity`。本机有 `.cache/toolchain`（JDK 21 / Android SDK / Gradle）时优先用它；换到干净机器会自动回退到系统的 `JAVA_HOME` / `ANDROID_HOME`。
 
 也可以用 Android Studio 打开 `HomelabApp/` 目录，把 Gradle JDK 指到 JDK 21 后直接 Run。
 
@@ -85,6 +87,7 @@ HomelabApp/
 
 - **连接**：Lab Tools（MCP 地址）、账本服务地址与 Token、Homarr 地址 / API Key / 看板名、Cloudreve WebDAV 地址 / 账号 / 密码 / 目录。
 - **小砂糖**：选择服务商并填入 API Key；识图模型、生图模型可单独配置。
+- **AI 修图**：设置 → 小砂糖 → AI 修图 → 服务设置，填网关地址（如 `http://<主机>:8094`）和 Token；同一张卡片里可调步数（默认 24）、上传最长边（默认 1536）和完成后自动保存。
 - **权限**：界面自动化需在 系统设置 → 无障碍 手动开启；使用时长排行需授予「使用情况访问」；照片上传需相册权限。
 - **外观**：主题、全局壁纸、是否在首页显示账本区。
 
@@ -98,10 +101,22 @@ HomelabApp/
 | bill-ai | 账本与账单导入 | `/api/overview`、`/api/transactions`、`/api/meta`、`/api/extract`、`/api/commit`、`/api/ingest` |
 | Homarr | 看板与磁贴 | `/api/boards`、`/api/apps`、tRPC `board.getBoardByName` |
 | Cloudreve | 照片备份 | WebDAV（PROPFIND / MKCOL / HEAD / PUT） |
+| img-edit-gateway | AI 修图（Qwen-Image-Edit-2511） | `/health`、`/v1/jobs`、`/v1/jobs/batch`、`/v1/jobs/{id}`、`/v1/results/{id}.png`，Bearer Token |
+
+## AI 修图
+
+手机端选照片、写一句中文指令，网关排队调用本机 ComfyUI 出图，结果自动保存回相册；图片不经过对话服务商。
+
+- **手机端**（入口、配置、三种模式、对话工具、构建与排查）：[docs/image-edit-android.md](docs/image-edit-android.md)
+- **服务端**（部署、模型文件、API、运维与调参）：[server/image-edit/README.md](server/image-edit/README.md)
+- **设计与实测数据**：[docs/image-edit-design.md](docs/image-edit-design.md)
+
+快速自检：`curl http://localhost:8094/health` 返回 `backend: comfyui` 即服务端就绪；手机配置入口在 设置 → 小砂糖 → AI 修图 → 服务设置。
 
 ## 隐私
 
 - `allowBackup=false`，API Key、账本 Token、WebDAV 密码只存本机 DataStore。
 - 通知监听、短信接收、无障碍、使用情况访问都需要用户手动授权，可随时关闭。
 - AI 对话会把你的提问、选中的照片、以及界面自动化时的屏幕文本发送给你所配置的 AI 服务商。
+- AI 修图的照片只发到家里的 `img-edit-gateway`（走局域网 / Tailscale），不经过 DeepSeek 等对话服务商；网关 Token 只存本机 DataStore，服务端结果 7 天后自动清理。
 - 仓库不含真实实例地址、内网 IP 与任何密钥；`local.properties`、`.cache/`、keystore、APK 均被 `.gitignore` 排除。

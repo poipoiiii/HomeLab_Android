@@ -418,6 +418,22 @@ class DeviceTools(private val context: Context) {
         }
 
     /**
+     * 给 Photo Picker（`PickVisualMedia`）拿到的临时授权 uri 用：
+     * 不检查相册全局权限，直接解码压缩，返回 JPEG base64。
+     */
+    suspend fun encodePickedImage(uriString: String, maxSide: Int = 1536): String =
+        withContext(Dispatchers.IO) {
+            val uri = Uri.parse(uriString.trim())
+            runCatching { encodePhoto(uri, maxSide) }
+                .getOrElse { error ->
+                    throw IllegalStateException(
+                        "打不开这张图片：$uriString（${error.message ?: "读取失败"}）",
+                        error,
+                    )
+                }
+        }
+
+    /**
      * 模型回传的 uri 可能带引号、转义斜杠，或只剩一个 id/文件名。
      * 这里把它还原成若干可尝试的相册 uri，按顺序逐个打开。
      */

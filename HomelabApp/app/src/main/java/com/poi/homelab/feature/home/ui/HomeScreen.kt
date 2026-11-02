@@ -125,6 +125,7 @@ fun HomeScreen(
     onLoadWeather: suspend (WeatherQuery) -> WeatherSnapshot? = { null },
     onOpenFiles: () -> Unit = {},
     onOpenCalendar: () -> Unit = {},
+    onOpenImageEdit: () -> Unit = {},
     onLoadDeviceUsage: () -> Unit = {},
     onOpenMenu: () -> Unit = {},
     onRefreshMarket: () -> Unit = {},
@@ -510,6 +511,12 @@ fun HomeScreen(
                         title = "文件洞察",
                         subtitle = "扫描本机文件，让小砂糖分析",
                         onClick = { closeSheetThen(onOpenFiles) },
+                    )
+                    ThinDivider()
+                    QuickActionRow(
+                        title = "AI 修图",
+                        subtitle = "选照片，一句话换背景 / 去路人",
+                        onClick = { closeSheetThen(onOpenImageEdit) },
                     )
                     if (powerUrl != null) {
                         ThinDivider()

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件适用于 `d:\taoxi_download_for_use\no_use_do\android` 下的所有工作。
+本文件适用于 `D:\ubuntu_\homelab_android` 下的所有工作。
 
 **使用方式**：先读本文件（硬性规则 + 速览 + 索引），再按任务查 §6 索引，只读需要的那份子文档，不要一次性全读。
 
@@ -45,7 +45,7 @@
 ## 4. 项目速览（HomelabApp）
 
 - 包名 / `namespace` / `applicationId`：`com.poi.homelab`，源码 `HomelabApp/app/src/main/java/com/poi/homelab`；应用名 `poi's home`。
-- 源码按功能分包：`core/`（容器、设置、工具、通用 UI）、`feature/<功能>/`（`ai` `bills` `calendar` `homarr` `home` `lab` `photos` `settings` `notify` `automation` `files`）、`navigation/`、`preview/`；新增代码按功能放 `feature/<功能>/`，不要恢复平铺的 `data/`、`ui/screens/`。
+- 源码按功能分包：`core/`（容器、设置、工具、通用 UI）、`feature/<功能>/`（`ai` `bills` `calendar` `homarr` `home` `imageedit` `lab` `photos` `settings` `notify` `automation` `files`）、`navigation/`、`preview/`；新增代码按功能放 `feature/<功能>/`，不要恢复平铺的 `data/`、`ui/screens/`。
 - 不要写死真实实例地址 / tailnet 域名 / 内网 IP / Token / API Key（`allowBackup=false`，Key 只存本机 DataStore，不进日志、文档、提交或截图）。
 - AI 走 Google ADK for Kotlin（`LlmAgent` + `InMemoryRunner`），工具用 KSP 生成的 `@Tool`，不要恢复手写 SSE / tool loop / JSON Schema。
 - 壁纸由 `AppRoot.WallpaperBackdrop` 全局铺底，不要在单页里再画；导航是左侧抽屉，没有底部导航。
@@ -54,7 +54,8 @@
 ## 5. 构建（完整说明见 build.md）
 
 ```powershell
-$root = 'D:\taoxi_download_for_use\no_use_do\android'
+# 仓库根目录；换机器时改成那台机器上的实际路径
+$root = 'D:\ubuntu_\homelab_android'
 $env:JAVA_HOME = Join-Path $root '.cache\toolchain\jdk\jdk-21.0.13.0.2+1'
 $env:ANDROID_HOME = Join-Path $root '.cache\toolchain\android-sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
@@ -65,6 +66,8 @@ $env:TMP = $env:TEMP
 & (Join-Path $root '.cache\toolchain\gradle-8.13\bin\gradle.bat') :app:compileDebugKotlin --offline
 ```
 
+`.cache/toolchain` 是本机预置的工具链；干净机器先装 JDK 21 + Android SDK，再把 `JAVA_HOME` / `ANDROID_HOME` 指过去并去掉 `--offline`。
+
 安装到手机走 `apply-to-phone.ps1`（构建 + `installDebug` + 启动，不是热更新）。构建报错、Live Edit、Run ≠ Build、adb 异常都先看 [build.md](docs/agents/build.md)。
 
 ## 6. 子文档索引（按任务只读对应文件）
@@ -73,6 +76,8 @@ $env:TMP = $env:TEMP
 | --- | --- |
 | UI / 导航 / 首页 / 壁纸 / 设置页 / Homarr / 应用内浏览器 / 预览 | [project.md](docs/agents/project.md) |
 | AI / 对话 / 工具 / prompt / 模型 / Markdown / 日历 / 权限与隐私约束 | [ai.md](docs/agents/ai.md) |
+| AI 修图（手机端入口、配置、模式、对话工具、构建排错） | [image-edit-android.md](docs/image-edit-android.md) |
+| AI 修图服务端（网关、模型、API、运维调参） | [server/image-edit/README.md](server/image-edit/README.md) |
 | 照片 / Cloudreve 上传 / 自动同步 | [photos.md](docs/agents/photos.md) |
 | 通知短信采集 / 账单导入 / 余额待确认 | [bills.md](docs/agents/bills.md) |
 | 无障碍自动化 / 开屏跳过 / 跳转守卫 | [automation.md](docs/agents/automation.md) |

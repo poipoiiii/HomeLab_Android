@@ -49,6 +49,9 @@ import com.poi.homelab.feature.homarr.WeatherQuery
 import com.poi.homelab.feature.homarr.WeatherSnapshot
 import com.poi.homelab.feature.home.defaultTodoItems
 import com.poi.homelab.feature.home.TodoItem
+import com.poi.homelab.feature.imageedit.ImageEditHealth
+import com.poi.homelab.feature.imageedit.ImageEditJob
+import com.poi.homelab.feature.imageedit.ImageEditOptions
 import com.poi.homelab.feature.lab.HealthSnapshot
 import com.poi.homelab.feature.market.DailyBar
 import com.poi.homelab.feature.market.IntradaySeries
@@ -232,6 +235,20 @@ data class MarketUiState(
     val previewSymbol: String? = null,
 )
 
+/** 修图页与设置页的共享状态；表单里的临时输入留在 Composable 本地。 */
+data class ImageEditUiState(
+    val open: Boolean = false,
+    val settingsOpen: Boolean = false,
+    val submitting: Boolean = false,
+    val jobs: List<ImageEditJob> = emptyList(),
+    val jobsLoading: Boolean = false,
+    val activeCount: Int = 0,
+    val error: String? = null,
+    val health: ImageEditHealth? = null,
+    val healthLoading: Boolean = false,
+    val healthError: String? = null,
+)
+
 data class UiState(
     val settings: AppSettings = AppSettings(),
     val health: HealthSnapshot? = null,
@@ -309,6 +326,8 @@ data class UiState(
     val market: MarketUiState = MarketUiState(),
     /** 藏宝阁捡漏。 */
     val watch: WatchUiState = WatchUiState(),
+    /** 独立「AI 修图」页；open/settingsOpen 控制两个全屏 overlay。 */
+    val imageEdit: ImageEditUiState = ImageEditUiState(),
 )
 
 class MainViewModel(private val app: AppContainer) : ViewModel() {
@@ -334,6 +353,8 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
     private val marketIntradayCache = mutableMapOf<String, IntradaySeries>()
     private var marketRefreshJob: Job? = null
     private var marketExtrasJob: Job? = null
+    private var imageEditPollJob: Job? = null
+    private val imageEditSaving = mutableSetOf<String>()
 
     /** 网络 / VPN 一变就重探，这样切 Tailscale 后不用手动下拉刷新。 */
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -1831,6 +1852,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                     settings = settings,
                     provider = provider,
                     ai = app.aiClient,
+                    imageEdit = app.imageEdit,
                     onPhotos = { tool, uris ->
                         if (uris.isNotEmpty()) pendingPhotos[tool] = uris
                     },
@@ -1855,7 +1877,14 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                             toolUsed = true
                             streamed.clear()
                             _state.update {
-                                it.copy(aiStream = "", aiStatus = "调用 ${calls.first().name}…")
+                                val tool = calls.first().name
+                                val status = when (tool) {
+                                    "edit_photo" -> "正在让家里的 Qwen-Image-Edit 修图，可能要几十秒…"
+                                    "batch_edit_photos" -> "正在提交批量修图任务…"
+                                    "save_image_edit_result" -> "正在保存修图结果…"
+                                    else -> "调用 $tool…"
+                                }
+                                it.copy(aiStream = "", aiStatus = status)
                             }
                         }
 
@@ -2537,6 +2566,15 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             - 上传到 Cloudreve：用户说“把最近 N 天的照片传到云盘/Cloudreve”时，直接调用 upload_recent_photos。调用后应用会弹出文件夹选择，用户选定目录后才真正上传；回答里只说明找到多少张、请用户在弹出的窗口里选目录，不要说“已上传完成”。用户取消弹窗时不要自动重试上传。
             - 参数要按用户的说法传：“最近 N 天”传 since_days=N；“只传 N 张”传 limit=N；两者都说了就都传。不要把“N 张”当成“最近 N 天”，也不要用默认张数代替用户明确说的张数；N 没说才用默认值。
             - 没有相册权限时引导去 设置 → 权限 授权相册；没配 Cloudreve 时引导去 设置 → 连接 填 WebDAV 地址、注册邮箱和 Cloudreve WebDAV 账户生成的密码（不是登录密码）。
+            家里修图（Qwen-Image-Edit-2511）：
+            - 用户明确说“改这张照片 / 换背景 / 去路人 / 换风格 / 把两张图合在一起 / 做商品图”时，调用 edit_photo；不要用 generate_image 假装修图。
+            - edit_photo 的 uri 只能来自 find_photos 或上一次 edit_photo 返回的 gallery_uri；用户没说清是哪张，先问或用 list_recent_photos 让他选，不要默认拿最新一张。
+            - 单张或多图合成用 edit_photo，最多 3 张参考图；多图合成时在指令里写清“图1/图2”的对应关系，并强调“保留人物脸部/身份不变，只改背景”。
+            - 用户要一次改 2 到 8 张、且每张用同一句指令时，用 batch_edit_photos，不要连续调用 edit_photo。批量只提交任务，出图后让用户去 AI 修图页看，或者之后用 list_image_edit_jobs / save_image_edit_result 取结果。
+            - 用户说“修好看点/优化一下”这类模糊要求时，先追问要改什么；不要盲目消耗一次几十秒的推理。
+            - edit_photo 返回 status=running 时，告诉用户任务还在跑，不要说完工；下次用户问起，用 list_image_edit_jobs 查，再用 save_image_edit_result 保存。
+            - 工具返回 error 或 hint 时如实复述原因：没配置就引导去 设置 → 小砂糖 → AI 修图；离线就提示检查 Tailscale 和家里容器；结果过期就建议重新修。
+            - 成功后用一两句话说明改了什么、已保存到相册；不要贴 base64、URL 或长 JSON。
             你的查询默认只读；可以写数据的例外只有四个：把生成的图片保存到相册、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）、把用户明确指定的照片上传到 Cloudreve。不能修改或删除已有文件，不能启停容器，不能修改设置。
             账本问题：
             - 用户问某个月/最近一个月的大额消费、支出排行、某笔之外还有什么时，调用 get_recent_expenses；不要把默认返回条数当成全部流水。
@@ -2749,6 +2787,302 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                         )
                     }
                 }
+        }
+    }
+
+    // ---------------------------------------------------------------- AI 修图
+
+    fun openImageEdit() {
+        _state.update { it.copy(imageEdit = it.imageEdit.copy(open = true, error = null)) }
+        refreshImageEditJobs()
+        startImageEditPolling()
+    }
+
+    fun closeImageEdit() {
+        imageEditPollJob?.cancel()
+        imageEditPollJob = null
+        _state.update { it.copy(imageEdit = it.imageEdit.copy(open = false)) }
+    }
+
+    fun openImageEditSettings() {
+        _state.update { it.copy(imageEdit = it.imageEdit.copy(settingsOpen = true)) }
+    }
+
+    fun closeImageEditSettings() {
+        _state.update { it.copy(imageEdit = it.imageEdit.copy(settingsOpen = false)) }
+    }
+
+    /** 给 Coil 用的缩略图地址；服务端结果接口允许用 ?token= 传凭证。 */
+    fun imageEditThumb(path: String): String? =
+        app.imageEdit.thumbUrl(_state.value.settings, path)
+
+    fun saveImageEditSettings(
+        url: String,
+        token: String,
+        model: String,
+        steps: Int,
+        maxSide: Int,
+        autoSave: Boolean,
+    ) {
+        val updated = _state.value.settings.copy(
+            imageEditUrl = url.trim().trimEnd('/'),
+            imageEditToken = token.trim(),
+            imageEditModel = model.trim().ifBlank { "Qwen/Qwen-Image-Edit-2511" },
+            imageEditSteps = steps.coerceIn(20, 60),
+            imageEditMaxSide = maxSide.coerceIn(768, 2048),
+            imageEditAutoSave = autoSave,
+        )
+        viewModelScope.launch {
+            app.settings.save(updated)
+            _state.update {
+                it.copy(
+                    settings = updated,
+                    imageEdit = it.imageEdit.copy(health = null, healthError = null),
+                    message = "修图服务设置已保存",
+                )
+            }
+        }
+    }
+
+    fun testImageEditConnection() {
+        val snapshot = _state.value
+        if (snapshot.imageEdit.healthLoading) return
+        if (snapshot.settings.imageEditUrl.isBlank()) {
+            _state.update {
+                it.copy(imageEdit = it.imageEdit.copy(healthError = "先填写网关地址"))
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update {
+                it.copy(imageEdit = it.imageEdit.copy(healthLoading = true, healthError = null))
+            }
+            runCatching { app.imageEdit.health(_state.value.settings) }
+                .onSuccess { health ->
+                    _state.update {
+                        it.copy(
+                            imageEdit = it.imageEdit.copy(
+                                healthLoading = false,
+                                health = health,
+                                healthError = null,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            imageEdit = it.imageEdit.copy(
+                                healthLoading = false,
+                                health = null,
+                                healthError = readable(error),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun submitImageEdit(
+        uris: List<String>,
+        instruction: String,
+        options: ImageEditOptions = ImageEditOptions(),
+    ) {
+        val snapshot = _state.value
+        if (snapshot.imageEdit.submitting) return
+        val settings = snapshot.settings
+        if (!app.imageEdit.configured(settings)) {
+            _state.update {
+                it.copy(imageEdit = it.imageEdit.copy(error = "还没有配置修图网关，先打开设置填写地址和 Token"))
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update {
+                it.copy(imageEdit = it.imageEdit.copy(submitting = true, error = null))
+            }
+            runCatching {
+                app.imageEdit.submit(
+                    settings,
+                    uris,
+                    instruction,
+                    options.copy(steps = settings.imageEditSteps),
+                    picked = true,
+                )
+            }
+                .onSuccess { job ->
+                    _state.update { current ->
+                        val jobs = (listOf(job) + current.imageEdit.jobs.filter { it.id != job.id })
+                            .take(50)
+                        current.copy(
+                            imageEdit = current.imageEdit.copy(
+                                submitting = false,
+                                jobs = jobs,
+                                activeCount = jobs.count { it.active },
+                                error = null,
+                            ),
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            imageEdit = it.imageEdit.copy(
+                                submitting = false,
+                                error = readable(error),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun submitImageEditBatch(
+        uris: List<String>,
+        instruction: String,
+        options: ImageEditOptions = ImageEditOptions(),
+    ) {
+        val snapshot = _state.value
+        if (snapshot.imageEdit.submitting) return
+        val settings = snapshot.settings
+        if (!app.imageEdit.configured(settings)) {
+            _state.update {
+                it.copy(imageEdit = it.imageEdit.copy(error = "还没有配置修图网关，先打开设置填写地址和 Token"))
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update {
+                it.copy(imageEdit = it.imageEdit.copy(submitting = true, error = null))
+            }
+            runCatching {
+                app.imageEdit.submitBatch(
+                    settings,
+                    uris,
+                    instruction,
+                    options.copy(steps = settings.imageEditSteps),
+                    picked = true,
+                )
+            }
+                .onSuccess { ack ->
+                    _state.update {
+                        it.copy(
+                            imageEdit = it.imageEdit.copy(
+                                submitting = false,
+                                error = null,
+                            ),
+                            message = "已提交 ${ack.jobs.size} 个修图任务",
+                        )
+                    }
+                    refreshImageEditJobs()
+                }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            imageEdit = it.imageEdit.copy(
+                                submitting = false,
+                                error = readable(error),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun refreshImageEditJobs() {
+        val settings = _state.value.settings
+        if (!app.imageEdit.configured(settings)) {
+            _state.update {
+                it.copy(
+                    imageEdit = it.imageEdit.copy(
+                        jobs = emptyList(),
+                        activeCount = 0,
+                        jobsLoading = false,
+                    ),
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(imageEdit = it.imageEdit.copy(jobsLoading = true)) }
+            runCatching { app.imageEdit.jobs(settings, "all", 30) }
+                .onSuccess { jobs -> applyImageEditJobs(settings, jobs) }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(
+                            imageEdit = it.imageEdit.copy(
+                                jobsLoading = false,
+                                error = readable(error),
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    fun cancelImageEditJob(jobId: String) {
+        val settings = _state.value.settings
+        viewModelScope.launch {
+            runCatching { app.imageEdit.cancel(settings, jobId) }
+                .onSuccess { refreshImageEditJobs() }
+                .onFailure { error ->
+                    _state.update {
+                        it.copy(imageEdit = it.imageEdit.copy(error = readable(error)))
+                    }
+                }
+        }
+    }
+
+    fun saveImageEditJob(jobId: String) {
+        val snapshot = _state.value
+        val job = snapshot.imageEdit.jobs.firstOrNull { it.id == jobId } ?: return
+        if (!imageEditSaving.add(jobId)) return
+        viewModelScope.launch {
+            runCatching { app.imageEdit.saveResult(snapshot.settings, job) }
+                .onSuccess { saved ->
+                    _state.update {
+                        it.copy(
+                            message = if (saved.alreadySaved) "这张已经保存过了" else "已保存到相册",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(message = readable(error)) }
+                }
+            imageEditSaving.remove(jobId)
+        }
+    }
+
+    /** 页面打开时每 2.5 秒拉一次；只在有活跃任务时轮询，关页即停，任务在服务端继续。 */
+    private fun startImageEditPolling() {
+        imageEditPollJob?.cancel()
+        imageEditPollJob = viewModelScope.launch {
+            while (true) {
+                delay(2500)
+                val snapshot = _state.value
+                if (!snapshot.imageEdit.open) break
+                val settings = snapshot.settings
+                if (!app.imageEdit.configured(settings)) break
+                if (snapshot.imageEdit.jobs.none { it.active }) continue
+                runCatching { app.imageEdit.jobs(settings, "all", 30) }
+                    .onSuccess { jobs -> applyImageEditJobs(settings, jobs) }
+            }
+        }
+    }
+
+    private suspend fun applyImageEditJobs(settings: AppSettings, jobs: List<ImageEditJob>) {
+        _state.update {
+            it.copy(
+                imageEdit = it.imageEdit.copy(
+                    jobs = jobs,
+                    jobsLoading = false,
+                    activeCount = jobs.count { job -> job.active },
+                ),
+            )
+        }
+        val saved = app.imageEdit.saveAllSucceeded(settings, jobs)
+        if (saved.isNotEmpty()) {
+            _state.update { it.copy(message = "已自动保存 ${saved.size} 张修图到相册") }
         }
     }
 

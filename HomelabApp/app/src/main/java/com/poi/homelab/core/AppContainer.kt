@@ -12,6 +12,9 @@ import com.poi.homelab.feature.files.FileInsightRepository
 import com.poi.homelab.feature.homarr.HomarrRepository
 import com.poi.homelab.feature.home.ChecklistStore
 import com.poi.homelab.feature.home.TodoStore
+import com.poi.homelab.feature.imageedit.ImageEditClient
+import com.poi.homelab.feature.imageedit.ImageEditRepository
+import com.poi.homelab.feature.imageedit.ImageEditStore
 import com.poi.homelab.feature.lab.LabRepository
 import com.poi.homelab.feature.lab.McpClient
 import com.poi.homelab.feature.market.MarketMindStore
@@ -54,6 +57,13 @@ class AppContainer(context: android.content.Context) {
     val bill = BillRepository(http, json)
     val homarr = HomarrRepository(http, json)
     val cloudreve = CloudreveRepository(http)
+    val imageEditStore = ImageEditStore(appContext)
+    val imageEdit = ImageEditRepository(
+        ImageEditClient(http, json),
+        deviceTools,
+        imageEditStore,
+        cloudreve,
+    )
     val weather = WeatherRepository(http, json)
     val market = MarketRepository(http, json)
     val marketMind = MarketMindStore(appContext)

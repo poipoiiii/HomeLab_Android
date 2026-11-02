@@ -27,6 +27,8 @@ import com.poi.homelab.feature.calendar.CalendarEntryInput
 import com.poi.homelab.feature.calendar.CalendarRepository
 import com.poi.homelab.feature.files.FileCategory
 import com.poi.homelab.feature.files.FileInsightRepository
+import com.poi.homelab.feature.imageedit.ImageEditOptions
+import com.poi.homelab.feature.imageedit.ImageEditRepository
 import com.poi.homelab.feature.files.FileInsights
 import com.poi.homelab.feature.lab.LabRepository
 import java.time.format.DateTimeFormatter
@@ -81,6 +83,7 @@ class AgentTools(
     private val settings: AppSettings,
     private val provider: AiProvider,
     private val ai: AiClient,
+    private val imageEdit: ImageEditRepository,
     private val onPhotos: (tool: String, uris: List<String>) -> Unit = { _, _ -> },
     private val onUploadRequested: (PhotoUploadRequest) -> Unit = {},
 ) {
@@ -705,6 +708,156 @@ class AgentTools(
     )
 
     @Tool(
+        name = "edit_photo",
+        description = "调用家里部署的 Qwen-Image-Edit-2511 按中文指令修改照片，成功后把结果保存到相册。" +
+            "适合换背景、去路人、换风格、多图合成、商品图；只应在用户明确要求修改某张照片时调用。",
+    )
+    suspend fun editPhoto(
+        @Param("要修改的照片 uri，来自 find_photos") uri: String,
+        @Param("修图指令，中文即可，例如：把背景换成傍晚海边，保留人物脸部和姿势不变") instruction: String,
+        @Param("可选，额外参考图 uri，最多 2 张，用英文逗号分隔") refs: String? = null,
+        @Param("可选，输出尺寸如 1024x1024；留空按输入比例") size: String? = null,
+        @Param("可选，随机种子；想复现上次结果时传上次返回的 seed") seed: Int? = null,
+    ): Map<String, Any?> = try {
+        val targets = buildList {
+            add(uri)
+            refs.orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }.forEach { add(it) }
+        }
+        val job = imageEdit.submit(
+            settings,
+            targets,
+            instruction,
+            ImageEditOptions(size = size, steps = settings.imageEditSteps, seed = seed),
+        )
+        onPhotos("edit_photo", targets.filter { it.isNotBlank() })
+        val done = imageEdit.await(settings, job.id, 240)
+        if (done.succeeded) {
+            val saved = imageEdit.saveResult(settings, done)
+            if (saved.galleryUri.isNotBlank()) onPhotos("edit_photo", listOf(saved.galleryUri))
+            mapOf(
+                "ok" to true,
+                "status" to done.status,
+                "job_id" to done.id,
+                "model" to settings.imageEditModel,
+                "instruction" to instruction.take(120),
+                "size" to "${done.width}x${done.height}",
+                "elapsed_ms" to done.elapsedMs,
+                "seed" to seed,
+                "path" to saved.path,
+                "gallery_uri" to saved.galleryUri,
+                "already_saved" to saved.alreadySaved,
+            )
+        } else if (done.active) {
+            mapOf(
+                "ok" to false,
+                "status" to done.status,
+                "job_id" to done.id,
+                "queue_position" to done.queuePosition,
+                "elapsed_ms" to done.elapsedMs,
+                "hint" to "任务还在跑，稍后用 list_image_edit_jobs 查看，或用 save_image_edit_result 保存结果。",
+            )
+        } else {
+            mapOf(
+                "ok" to false,
+                "status" to done.status,
+                "job_id" to done.id,
+                "error" to (done.error?.code ?: done.status),
+                "message" to (done.error?.message ?: "修图失败"),
+            )
+        }
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "edit_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "batch_edit_photos",
+        description = "一次把 2–8 张照片按同一句指令批量提交给家里的 Qwen-Image-Edit-2511。" +
+            "只提交任务，不等待出图；用户要去 AI 修图页看进度。多图合成请用 edit_photo 的 refs。",
+    )
+    suspend fun batchEditPhotos(
+        @Param("照片 uri 列表，英文逗号分隔，2–8 张，来自 find_photos") uris: String,
+        @Param("统一修图指令") instruction: String,
+        @Param("可选，输出尺寸如 1024x1024") size: String? = null,
+        @Param("可选，随机种子；整批复用同一个 seed") seed: Int? = null,
+    ): Map<String, Any?> = try {
+        val targets = uris.split(',').map { it.trim() }.filter { it.isNotBlank() }
+        val ack = imageEdit.submitBatch(
+            settings,
+            targets,
+            instruction,
+            ImageEditOptions(size = size, steps = settings.imageEditSteps, seed = seed),
+        )
+        onPhotos("batch_edit_photos", targets)
+        mapOf(
+            "ok" to true,
+            "batch_id" to ack.batchId,
+            "count" to ack.jobs.size,
+            "jobs" to ack.jobs.map { mapOf("id" to it.id, "status" to it.status, "queue_position" to it.queuePosition) },
+            "hint" to "已提交，去 AI 修图页或稍后用 list_image_edit_jobs 查看。",
+        )
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "batch_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "list_image_edit_jobs",
+        description = "查看最近的修图任务状态（排队/进行中/成功/失败/取消），用于回答“刚才那张修好了吗”。只读。",
+    )
+    suspend fun listImageEditJobs(
+        @Param("最多返回几条，默认 10，最大 30") limit: Int? = null,
+        @Param("过滤：all / active / succeeded / failed / canceled，默认 all") status: String? = null,
+    ): Map<String, Any?> = try {
+        val jobs = imageEdit.jobs(settings, status ?: "all", (limit ?: 10).coerceIn(1, 30))
+        mapOf(
+            "count" to jobs.size,
+            "jobs" to jobs.map { job ->
+                mapOf(
+                    "job_id" to job.id,
+                    "label" to job.label,
+                    "status" to job.status,
+                    "queue_position" to job.queuePosition,
+                    "elapsed_ms" to job.elapsedMs,
+                    "result_url" to job.resultUrl,
+                    "thumb_url" to job.thumbUrl,
+                    "error" to job.error?.code,
+                )
+            },
+        )
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "list_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "save_image_edit_result",
+        description = "把已经成功的修图任务结果下载并保存到相册，用于 edit_photo 超时后补存，或用户说“把刚才那张存下来”。",
+    )
+    suspend fun saveImageEditResult(
+        @Param("job id，来自 edit_photo / batch_edit_photos / list_image_edit_jobs") jobId: String,
+    ): Map<String, Any?> = try {
+        val job = imageEdit.job(settings, jobId.trim())
+        if (!job.succeeded) {
+            mapOf(
+                "ok" to false,
+                "status" to job.status,
+                "message" to "任务不是成功状态，无法保存",
+                "error" to (job.error?.code ?: job.status),
+            )
+        } else {
+            val saved = imageEdit.saveResult(settings, job)
+            if (saved.galleryUri.isNotBlank()) onPhotos("save_image_edit_result", listOf(saved.galleryUri))
+            mapOf(
+                "ok" to true,
+                "job_id" to job.id,
+                "path" to saved.path,
+                "gallery_uri" to saved.galleryUri,
+                "already_saved" to saved.alreadySaved,
+            )
+        }
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "save_failed", "message" to errorText(error))
+    }
+
+    @Tool(
         name = "automation_status",
         description = "检查界面自动化是否可用：无障碍服务是否已开启、当前前台应用。要操作其他 App 前先调用。只读。",
     )
@@ -821,6 +974,9 @@ class AgentTools(
 
     private fun isDate(value: String): Boolean =
         runCatching { LocalDate.parse(value) }.isSuccess
+
+    private fun errorText(error: Throwable): String =
+        error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
 
     private suspend fun safely(block: suspend () -> Map<String, Any?>): Map<String, Any?> =
         try {

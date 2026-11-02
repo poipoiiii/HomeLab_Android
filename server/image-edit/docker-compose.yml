@@ -1,0 +1,25 @@
+# 只跑网关：BACKEND=mock 时是纯 CPU，任何机器都能起。
+# BACKEND=comfyui / diffusers 需要在有 GPU 的机器上原生跑（见 provision.sh 与 docs/image-edit-design.md），
+# 因为容器里透传 AMD GPU 还要额外装 ROCm 运行时，不如直接在 WSL 里用 venv 省事。
+# 端口用 8094：8090 留给 Beszel。
+services:
+  gateway:
+    build: ./gateway
+    container_name: img-edit-gateway
+    env_file: .env
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8094:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

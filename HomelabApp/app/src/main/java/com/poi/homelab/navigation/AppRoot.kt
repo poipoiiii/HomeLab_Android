@@ -115,6 +115,8 @@ import com.poi.homelab.feature.home.ui.ChecklistItem
 import com.poi.homelab.feature.home.ui.DailyChecklistCard
 import com.poi.homelab.feature.home.ui.HomeScreen
 import com.poi.homelab.feature.home.ui.TodoEditorSheet
+import com.poi.homelab.feature.imageedit.ui.ImageEditScreen
+import com.poi.homelab.feature.imageedit.ui.ImageEditSettingsScreen
 import com.poi.homelab.feature.lab.ui.DownloadsScreen
 import com.poi.homelab.feature.lab.ui.ServicesScreen
 import com.poi.homelab.feature.market.ui.MarketIntradaySheet
@@ -200,6 +202,41 @@ fun HomelabApp(viewModel: MainViewModel) {
         return
     }
 
+    // 修图设置页叠在修图页之上：从设置里直接打开时也走同一个 overlay
+    if (state.imageEdit.settingsOpen) {
+        BackHandler { viewModel.closeImageEditSettings() }
+        WallpaperBackdrop(state.settings) {
+            ImageEditSettingsScreen(
+                state = state,
+                onBack = viewModel::closeImageEditSettings,
+                onTest = viewModel::testImageEditConnection,
+                onSave = viewModel::saveImageEditSettings,
+            )
+        }
+        return
+    }
+
+    if (state.imageEdit.open) {
+        BackHandler { viewModel.closeImageEdit() }
+        WallpaperBackdrop(state.settings) {
+            ImageEditScreen(
+                jobs = state.imageEdit.jobs,
+                jobsLoading = state.imageEdit.jobsLoading,
+                submitting = state.imageEdit.submitting,
+                error = state.imageEdit.error,
+                thumbUrl = viewModel::imageEditThumb,
+                onSubmitSingle = viewModel::submitImageEdit,
+                onSubmitBatch = viewModel::submitImageEditBatch,
+                onRefreshJobs = viewModel::refreshImageEditJobs,
+                onCancelJob = viewModel::cancelImageEditJob,
+                onSaveJob = viewModel::saveImageEditJob,
+                onOpenSettings = viewModel::openImageEditSettings,
+                onClose = viewModel::closeImageEdit,
+            )
+        }
+        return
+    }
+
     BackHandler {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
@@ -260,6 +297,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onLoadWeather = viewModel::loadWeather,
                     onOpenFiles = { fileInsightOpen = true },
                     onOpenCalendar = { openTab(Tab.Calendar) },
+                    onOpenImageEdit = viewModel::openImageEdit,
                     onLoadDeviceUsage = viewModel::loadDeviceUsage,
                     onOpenMenu = { scope.launch { drawerState.open() } },
                     onRefreshMarket = viewModel::refreshMarket,
@@ -332,6 +370,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onSend = viewModel::sendChat,
                     onClear = viewModel::clearChat,
                     onOpenAiSettings = { aiConfigOpen = true },
+                    onOpenImageEdit = viewModel::openImageEdit,
                     onRefreshBalance = viewModel::refreshAiBalance,
                     onChooseUploadDir = viewModel::startPendingUpload,
                     onCancelUpload = viewModel::cancelPendingUpload,
@@ -346,6 +385,8 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onTest = viewModel::testConnections,
                     onTheme = viewModel::setThemeMode,
                     onOpenAiSettings = { aiConfigOpen = true },
+                    onOpenImageEdit = viewModel::openImageEdit,
+                    onOpenImageEditSettings = viewModel::openImageEditSettings,
                     onFileTreeSelected = viewModel::addFileTreeUri,
                     onClearFileTree = viewModel::clearFileTree,
                     onOpenFiles = { fileInsightOpen = true },

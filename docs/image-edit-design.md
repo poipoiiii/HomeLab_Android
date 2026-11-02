@@ -1,6 +1,6 @@
 # 家庭服务器 Qwen-Image-Edit-2511 修图服务设计稿
 
-> 状态：设计稿，待实现（一次性交付，不拆阶段）
+> 状态：已实现（2026-11-02）。推理后端从 vLLM-Omni 改为 **ComfyUI + GGUF 量化**，原因见 §4.2 的本机实测。
 > 范围：客户端（`poi's home` / 小砂糖）+ 服务端（家里部署的模型与网关）
 > 目标：在 AI 对话和独立修图页里，用一句中文直接改相册照片；图片只走家里的服务器，不经过第三方 AI。
 
@@ -42,7 +42,7 @@
               ImageEditClient（OkHttp）
                       │  HTTP + Bearer Token（Tailscale / 局域网）
                       ▼
-           家庭服务器 img-edit-gateway :8090
+           家庭服务器 img-edit-gateway :8094
              ├─ Token 校验、参数校验、输入缩略图（去 EXIF）
              ├─ SQLite job 表：queued / running / succeeded / failed / canceled
              ├─ 单并发 worker + 队列 + request_id 幂等 + 内容缓存
@@ -89,6 +89,14 @@ vllm serve Qwen/Qwen-Image-Edit-2511 --omni --port 8092
 | < 24GB | 不建议 | 量化/offload 后体验不可接受 |
 
 补充：社区部署记录显示 bf16 全量加载约需 40GB+ 显存；权重与 HF 缓存建议预留 100GB 以上磁盘；内存建议 32GB 以上。以上为经验值，最终以家里机器实测为准，**不写死到 App**。
+
+**本机实测（2026-11-02，AMD RX 7900 XTX 24GB + WSL2 19GB 内存）**：
+
+- GPU 计算要在 WSL 里用 ROCm：`torch 2.10.0+rocm7.0`，并设置 `LD_PRELOAD=/opt/rocm-7.2.0/lib/libhsa-runtime64.so.1`（rocr4wsl 运行时，走 `/dev/dxg`）。不预加载时 `torch.cuda.is_available()` 为 False；`torch 2.5.1+rocm6.2` 与本机 ROCm 7.2 混用会直接 Bus error。
+- bf16 权重共 55GB（transformer 39GB + text encoder 16GB），24GB 显存 + 19GB 内存放不下，diffusers 的 `QwenImageEditPlusPipeline` 在本机加载不起来。
+- 实际路线：**ComfyUI + GGUF**。`qwen-image-edit-2511-Q4_K_M.gguf`（12.8GB）+ `qwen_2.5_vl_7b_fp8_scaled`（9.4GB）+ `qwen_image_vae`（254MB），ComfyUI 用 `TextEncodeQwenImageEditPlus` + `ModelSamplingAuraFlow(shift=3.1)` + `KSampler(cfg=1.0)`。
+- 实测出图：1088×1088、30 步、CFG 1.0，**单张约 250 秒**（含首次加载；第二张热机同样约 255 秒），峰值显存约 22GB，出图期间 `/system_stats` 偶尔超时属正常。
+- 因此 App 的默认步数建议按需下调到 20–24（设置页可调）；批量 8 张约 30 分钟量级，不要一次塞满队列。
 
 ### 4.3 目录结构
 
@@ -388,7 +396,7 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "8090:8090"
+      - "8094:8090"
     depends_on:
       - vllm
     healthcheck:
@@ -434,9 +442,9 @@ huggingface-cli download Qwen/Qwen-Image-Edit-2511 --local-dir ./models/Qwen-Ima
 
 网络：
 
-- 服务器装 Tailscale，手机用 MagicDNS 主机名访问 `http://<tailnet-host>:8090`；只在 tailnet 内，不映射公网端口。
+- 服务器装 Tailscale，手机用 MagicDNS 主机名访问 `http://<tailnet-host>:8094`；只在 tailnet 内，不映射公网端口。
 - 需要 HTTPS 时用 `tailscale serve` 反代，网关本身保持 HTTP。
-- Tailscale ACL 只允许自己的设备访问 8090；8092 不要开放。
+- Tailscale ACL 只允许自己的设备访问 8094；8092 不要开放。
 
 启动顺序与冷启动：
 
@@ -460,10 +468,10 @@ huggingface-cli download Qwen/Qwen-Image-Edit-2511 --local-dir ./models/Qwen-Ima
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `imageEditUrl` | `""` | 网关地址，如 `http://home-server:8090`；空 = 未启用 |
+| `imageEditUrl` | `""` | 网关地址，如 `http://home-server:8094`（本机实际端口，8090 留给 Beszel）；空 = 未启用 |
 | `imageEditToken` | `""` | Bearer Token，只存本机 DataStore |
 | `imageEditModel` | `"Qwen/Qwen-Image-Edit-2511"` | 展示与服务端校验用 |
-| `imageEditSteps` | `40` | 20–60 |
+| `imageEditSteps` | `24` | 20–60；本机实测约 8 秒/步，40 步单张要 5 分钟以上 |
 | `imageEditMaxSide` | `1536` | 上传前压缩的最长边，768–2048 |
 | `imageEditAutoSave` | `true` | 任务成功后自动保存到相册 |
 
@@ -874,7 +882,7 @@ data class ImageEditUiState(
 ### 6.4 失败分支
 
 - 未配置 → 工具/页面提示去设置页填地址和 Token。
-- 连不上 → 提示检查 Tailscale、网关容器和 8090 端口，并说明没有出图。
+- 连不上 → 提示检查 Tailscale、网关容器和 8094 端口，并说明没有出图。
 - 401 → 提示 Token 不对。
 - 429 → 提示队列已满（页面显示前面还有几个），不自动重试。
 - 504/`backend_timeout` → 任务标记失败，可重试或降低步数。
@@ -904,7 +912,7 @@ data class ImageEditUiState(
 - 日志不记录图片、prompt 原文或 Token；SQLite 只存 prompt 哈希、长度和用户可见的 `label`。
 - 结果图与输入缩略图保留 7 天，job 元数据保留 30 天，均可配置；手机相册里的结果由用户自己管理。
 - Token 只存服务端 `.env` 与手机 DataStore；`allowBackup=false`；不写进文档、日志、截图、提交。
-- 8092 只绑内网/容器网络，公网不开放；8090 只通过 Tailscale 访问，ACL 限制到自己的设备。
+- 8092 只绑内网/容器网络，公网不开放；8094 只通过 Tailscale 访问，ACL 限制到自己的设备。
 - 用户必须明确要求才修图；不默认扫描相册、不批量上传；不覆盖、不删除原图。独立页通过系统照片选择器读取，不依赖全局相册权限；Agent 工具仍按现有相册权限规则。
 - 分享结果通过 `FileProvider` 授予临时读权限，不暴露应用私有目录。
 

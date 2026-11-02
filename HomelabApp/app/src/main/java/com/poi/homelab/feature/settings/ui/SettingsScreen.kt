@@ -89,6 +89,8 @@ fun SettingsScreen(
     onTest: () -> Unit,
     onTheme: (String) -> Unit,
     onOpenAiSettings: () -> Unit,
+    onOpenImageEdit: () -> Unit = {},
+    onOpenImageEditSettings: () -> Unit = {},
     onFileTreeSelected: (String) -> Unit,
     onClearFileTree: () -> Unit,
     onShowLedger: (Boolean) -> Unit,
@@ -657,6 +659,45 @@ fun SettingsScreen(
                     onClick = onOpenAiSettings,
                     enabled = !isPreview,
                 )
+            }
+        }
+
+        item {
+            CreamCard {
+                Text("AI 修图", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = if (settings.imageEditUrl.isNotBlank() && settings.imageEditToken.isNotBlank()) {
+                        "已配置 · ${settings.imageEditModel}"
+                    } else {
+                        "未配置"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                SettingHint(
+                    "独立的修图页：选 1–3 张照片写一句中文指令，结果自动存相册。" +
+                        "图片只发给家里的修图网关，不经过对话服务商。",
+                    detailed,
+                    Modifier.padding(top = 5.dp, bottom = 12.dp),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    SecondaryButton(
+                        text = "打开修图",
+                        onClick = onOpenImageEdit,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isPreview,
+                    )
+                    SecondaryButton(
+                        text = "服务设置",
+                        onClick = onOpenImageEditSettings,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isPreview,
+                    )
+                }
             }
         }
 

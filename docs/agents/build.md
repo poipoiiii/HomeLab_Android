@@ -7,7 +7,8 @@
 统一使用项目内工具链，不要依赖系统 JDK / Gradle：
 
 ```powershell
-$root = 'D:\taoxi_download_for_use\no_use_do\android'
+# 仓库根目录；换机器时改成那台机器上的实际路径
+$root = 'D:\ubuntu_\homelab_android'
 $env:JAVA_HOME = Join-Path $root '.cache\toolchain\jdk\jdk-21.0.13.0.2+1'
 $env:ANDROID_HOME = Join-Path $root '.cache\toolchain\android-sdk'
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
@@ -17,6 +18,8 @@ $env:TEMP = Join-Path $root '.cache\tmp'
 $env:TMP = $env:TEMP
 & (Join-Path $root '.cache\toolchain\gradle-8.13\bin\gradle.bat') :app:compileDebugKotlin --offline
 ```
+
+`$root/.cache/toolchain` 是这台机器预置的 JDK / Android SDK / Gradle；换到干净机器时，先装 JDK 21 + Android SDK（platform `android-37.0`、build-tools `37.0.0`），把 `JAVA_HOME` / `ANDROID_HOME` 指过去，并去掉 `--offline` 让 Gradle 拉依赖。
 
 - 当前工具链：Gradle 8.13、AGP 8.13.0、Kotlin 2.3.21、KSP 2.3.12、compileSdk 37（`buildToolsVersion = "37.0.0"`）。Gradle wrapper 已指向 8.13；`gradlew.bat` 与命令行使用同一版本。
 - ADK 的 Android AAR 要求 compileSdk ≥ 37，必须安装 SDK 包 `platforms;android-37.0` 与 `build-tools;37.0.0`。`build.gradle.kts` 使用新的 `compileSdk { version = release(37) }` DSL；不要再写旧的 `compileSdk = 37`，旧 DSL 会去找不存在的 `platforms/android-37`。

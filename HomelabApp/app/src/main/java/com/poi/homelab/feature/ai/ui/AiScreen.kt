@@ -78,6 +78,7 @@ import com.poi.homelab.core.ui.components.CreamCard
 import com.poi.homelab.core.ui.components.InlineAction
 import com.poi.homelab.core.ui.components.LoadingRow
 import com.poi.homelab.core.ui.components.PrimaryButton
+import com.poi.homelab.core.ui.components.SecondaryButton
 import com.poi.homelab.core.ui.theme.Danger
 import com.poi.homelab.feature.ai.ChatMessage
 import com.poi.homelab.feature.ai.requiresKey
@@ -99,6 +100,7 @@ fun AiScreen(
     onSend: (String) -> Unit,
     onClear: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    onOpenImageEdit: () -> Unit = {},
     onRefreshBalance: () -> Unit = {},
     onChooseUploadDir: (String) -> Unit = {},
     onCancelUpload: () -> Unit = {},
@@ -282,6 +284,18 @@ fun AiScreen(
                                 }
                             },
                         )
+                    }
+                    item {
+                        CreamCard {
+                            Text("想直接改照片？", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "去修图页选照片、写一句中文指令，换背景、去路人、做商品图都行。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
+                            )
+                            SecondaryButton(text = "去 AI 修图", onClick = onOpenImageEdit)
+                        }
                     }
                 }
 
