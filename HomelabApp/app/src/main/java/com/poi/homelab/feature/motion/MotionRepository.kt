@@ -26,6 +26,8 @@ class MotionRepository(
 
     suspend fun jobs(limit: Int = 30): List<MotionJob> = client.jobs(url(), token(), limit)
 
+    suspend fun job(id: String): MotionJob = client.job(url(), token(), id)
+
     suspend fun submit(request: MotionRequest): MotionJob = client.create(url(), token(), request)
 
     suspend fun cancel(id: String): MotionJob = client.cancel(url(), token(), id)

@@ -79,6 +79,7 @@ import com.poi.homelab.core.ui.components.InlineAction
 import com.poi.homelab.core.ui.components.LoadingRow
 import com.poi.homelab.core.ui.components.PrimaryButton
 import com.poi.homelab.core.ui.components.SecondaryButton
+import com.poi.homelab.core.ui.theme.CardSurfaceAlpha
 import com.poi.homelab.core.ui.theme.Danger
 import com.poi.homelab.feature.ai.ChatMessage
 import com.poi.homelab.feature.ai.requiresKey
@@ -101,6 +102,7 @@ fun AiScreen(
     onClear: () -> Unit,
     onOpenAiSettings: () -> Unit,
     onOpenImageEdit: () -> Unit = {},
+    onOpenFiles: () -> Unit = {},
     onRefreshBalance: () -> Unit = {},
     onChooseUploadDir: (String) -> Unit = {},
     onCancelUpload: () -> Unit = {},
@@ -234,6 +236,17 @@ fun AiScreen(
             InlineAction("配置", onOpenAiSettings)
         }
 
+        // 小砂糖的子服务：文件洞察与 AI 修图都从这里进，首页不再单独提供入口
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 12.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AiSubService(label = "文件洞察", onClick = onOpenFiles)
+            AiSubService(label = "AI 修图", onClick = onOpenImageEdit)
+        }
+
         if (state.chatMessages.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp),
@@ -287,14 +300,26 @@ fun AiScreen(
                     }
                     item {
                         CreamCard {
-                            Text("想直接改照片？", style = MaterialTheme.typography.titleMedium)
+                            Text("照片和视频都能直接说", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "去修图页选照片、写一句中文指令，换背景、去路人、做商品图都行。",
+                                "改照片：说「把最近那张照片背景换成海边」，我会调用家里的修图模型。\n" +
+                                    "做视频：说「做个 45 秒城市混剪」，我先给分镜方案，确认后才提交渲染。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 6.dp, bottom = 12.dp),
                             )
-                            SecondaryButton(text = "去 AI 修图", onClick = onOpenImageEdit)
+                            SecondaryButton(text = "去 AI 修图页挑照片", onClick = onOpenImageEdit)
+                        }
+                    }
+                    item {
+                        CreamCard {
+                            Text("想自己调分镜？", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "视频页可以手动改镜头、主题和时长；直接在这里说需求也可以，我先给你完整方案。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp),
+                            )
                         }
                     }
                 }
@@ -988,6 +1013,24 @@ private fun StreamingBubble(content: String) {
             )
             StreamingCaret(Modifier.padding(top = 8.dp))
         }
+    }
+}
+
+/** 小砂糖下面的子服务入口。 */
+@Composable
+private fun AiSubService(label: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+        )
     }
 }
 

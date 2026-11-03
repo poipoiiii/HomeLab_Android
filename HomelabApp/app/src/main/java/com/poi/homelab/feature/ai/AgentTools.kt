@@ -30,6 +30,10 @@ import com.poi.homelab.feature.files.FileInsightRepository
 import com.poi.homelab.feature.imageedit.ImageEditOptions
 import com.poi.homelab.feature.imageedit.ImageEditRepository
 import com.poi.homelab.feature.imageedit.composeImageEditPrompt
+import com.poi.homelab.feature.motion.MotionDirector
+import com.poi.homelab.feature.motion.MotionPlanStore
+import com.poi.homelab.feature.motion.MotionRepository
+import com.poi.homelab.feature.motion.MotionRequest
 import com.poi.homelab.feature.files.FileInsights
 import com.poi.homelab.feature.lab.LabRepository
 import java.time.format.DateTimeFormatter
@@ -85,6 +89,9 @@ class AgentTools(
     private val provider: AiProvider,
     private val ai: AiClient,
     private val imageEdit: ImageEditRepository,
+    private val motion: MotionRepository,
+    private val motionDirector: MotionDirector,
+    private val motionPlans: MotionPlanStore,
     private val onPhotos: (tool: String, uris: List<String>) -> Unit = { _, _ -> },
     private val onUploadRequested: (PhotoUploadRequest) -> Unit = {},
 ) {
@@ -951,6 +958,213 @@ class AgentTools(
     ): Map<String, Any?> = safely {
         UiAutomation.waitFor(text, (timeoutMs ?: 5000).coerceIn(500, 15_000)).toPlainMap()
     }
+
+    // ---------------------------------------------------------------- AI 导演 / 视频
+
+    @Tool(
+        name = "plan_video",
+        description = "把用户的视频需求整理成 AI 导演分镜方案。返回 status=ask（继续追问）或 status=plan（方案摘要）。" +
+            "只出方案，不提交渲染；用户明确确认后再调用 render_video。",
+    )
+    suspend fun planVideo(
+        @Param("用户的一句话需求，或对上一版方案的修改要求，例如：做个 45 秒赛博朋克风格的城市混剪") brief: String,
+        @Param("可选，用户要开始一个全新主题时传 true，清空上一版方案和导演对话") fresh: Boolean? = null,
+    ): Map<String, Any?> = try {
+        if (brief.isBlank()) {
+            mapOf("ok" to false, "error" to "empty_brief", "message" to "先告诉我想做什么视频")
+        } else {
+            if (fresh == true) motionPlans.reset()
+            val history = motionPlans.history()
+            val reply = motionDirector.reply(provider, history, brief, motionPlans.last)
+            motionPlans.append("user", brief)
+            motionPlans.append("assistant", reply.message)
+            val plan = reply.plan
+            if (reply.status == "plan" && plan != null) {
+                motionPlans.pending = plan
+                motionPlans.last = plan
+                motionPlanSummary(plan) + mapOf(
+                    "ok" to true,
+                    "status" to "plan",
+                    "message" to reply.message,
+                    "video_configured" to motion.configured(),
+                    "hint" to "把片名、镜头数和时长概括给用户，等用户明确确认后再调用 render_video；不要提前提交。",
+                )
+            } else {
+                mapOf(
+                    "ok" to true,
+                    "status" to "ask",
+                    "message" to reply.message,
+                    "hint" to "按 message 继续追问或补充信息，等用户回答后再调用 plan_video。",
+                )
+            }
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "plan_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "render_video",
+        description = "把 plan_video 暂存的分镜方案提交给家里视频服务渲染。" +
+            "只有用户明确说确认/可以/开始/生成吧之后才能调用；模型不能自作主张提交。",
+    )
+    suspend fun renderVideo(): Map<String, Any?> = try {
+        val plan = motionPlans.pending
+        when {
+            plan == null -> mapOf(
+                "ok" to false,
+                "error" to "no_pending_plan",
+                "message" to "还没有待确认的视频方案，先调用 plan_video。",
+            )
+
+            !motion.configured() -> mapOf(
+                "ok" to false,
+                "error" to "not_configured",
+                "message" to "视频服务还没配置，去 视频页 → 设置 填地址和 Token。",
+            )
+
+            else -> {
+                val job = motion.submit(plan)
+                motionPlans.pending = null
+                motionPlans.last = null
+                mapOf(
+                    "ok" to true,
+                    "job_id" to job.id,
+                    "status" to job.status,
+                    "title" to plan.title,
+                    "scene_count" to plan.scenes.size,
+                    "hint" to "已提交渲染；视频要几分钟到几十分钟。不要说完工，用户问进度时调用 list_video_jobs。",
+                )
+            }
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "render_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "list_video_jobs",
+        description = "查看最近的视频渲染任务：状态、进度、排队位置、耗时、错误。只读。",
+    )
+    suspend fun listVideoJobs(
+        @Param("最多返回几条，默认 10，最大 30") limit: Int? = null,
+    ): Map<String, Any?> = try {
+        if (!motion.configured()) {
+            mapOf(
+                "ok" to false,
+                "error" to "not_configured",
+                "message" to "视频服务还没配置，去 视频页 → 设置 填地址和 Token。",
+            )
+        } else {
+            val jobs = motion.jobs((limit ?: 10).coerceIn(1, 30))
+            mapOf(
+                "count" to jobs.size,
+                "jobs" to jobs.map { job ->
+                    mapOf(
+                        "job_id" to job.id,
+                        "title" to job.title,
+                        "status" to job.status,
+                        "progress_percent" to (job.progress * 100).toInt(),
+                        "queue_position" to job.queuePosition,
+                        "elapsed_ms" to job.elapsedMs,
+                        "has_video" to !job.videoUrl.isNullOrBlank(),
+                        "error" to job.error?.code,
+                    )
+                },
+            )
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "list_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "save_video_result",
+        description = "把已经渲染成功的视频下载并保存到相册。用户说保存/存下来时调用。",
+    )
+    suspend fun saveVideoResult(
+        @Param("视频任务 id，来自 render_video 或 list_video_jobs") jobId: String,
+    ): Map<String, Any?> = try {
+        val id = jobId.trim()
+        if (id.isBlank()) {
+            mapOf("ok" to false, "error" to "bad_job_id", "message" to "缺少视频任务 id")
+        } else {
+            val job = motion.job(id)
+            if (!job.succeeded) {
+                mapOf(
+                    "ok" to false,
+                    "status" to job.status,
+                    "message" to "任务还没成功，暂时不能保存",
+                    "error" to (job.error?.code ?: job.status),
+                )
+            } else {
+                val saved = motion.saveVideo(job)
+                motion.posterUrl(job)?.let { poster ->
+                    onPhotos("save_video_result", listOf(poster))
+                }
+                mapOf(
+                    "ok" to true,
+                    "job_id" to job.id,
+                    "title" to job.title,
+                    "path" to saved.path,
+                    "gallery_uri" to saved.galleryUri,
+                    "hint" to "已保存到相册；视频页里也能直接播放。",
+                )
+            }
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "save_failed", "message" to errorText(error))
+    }
+
+    @Tool(
+        name = "cancel_video_job",
+        description = "按用户明确要求取消一个排队中或渲染中的视频任务。",
+    )
+    suspend fun cancelVideoJob(
+        @Param("视频任务 id，来自 render_video 或 list_video_jobs") jobId: String,
+    ): Map<String, Any?> = try {
+        val id = jobId.trim()
+        if (id.isBlank()) {
+            mapOf("ok" to false, "error" to "bad_job_id", "message" to "缺少视频任务 id")
+        } else {
+            val job = motion.cancel(id)
+            mapOf(
+                "ok" to true,
+                "job_id" to job.id,
+                "status" to job.status,
+                "hint" to if (job.status == "canceled") "已取消" else "已请求取消，渲染器可能还要一会儿才停。",
+            )
+        }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        mapOf("ok" to false, "error" to "cancel_failed", "message" to errorText(error))
+    }
+
+    private fun motionPlanSummary(plan: MotionRequest): Map<String, Any?> =
+        mapOf(
+            "title" to plan.title,
+            "theme" to plan.theme,
+            "resolution" to plan.resolution,
+            "scene_count" to plan.scenes.size,
+            "duration_seconds" to plan.scenes.mapNotNull { it.duration }.sum(),
+            "scenes" to plan.scenes.mapIndexed { index, scene ->
+                mapOf(
+                    "index" to index + 1,
+                    "type" to scene.type,
+                    "title" to listOf(scene.title, scene.heading, scene.subtitle, scene.text, scene.caption)
+                        .firstOrNull { it.isNotBlank() }
+                        .orEmpty()
+                        .take(60),
+                    "duration" to scene.duration,
+                )
+            },
+        )
 
     private fun normalizeCalendarType(type: String?): String {
         val value = type?.trim()?.lowercase().orEmpty()

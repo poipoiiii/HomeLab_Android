@@ -345,7 +345,7 @@ private val previewFileState = previewState.copy(
 @Composable
 private fun HomePreview() {
     HomelabTheme("light") {
-        HomeScreen(previewState, {}, {}, {}, {}, {}, {}, {}, {})
+        HomeScreen(previewState, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -359,7 +359,7 @@ private fun HomePreview() {
 @Composable
 private fun HomeDarkPreview() {
     HomelabTheme("dark") {
-        HomeScreen(previewState, {}, {}, {}, {}, {}, {}, {}, {})
+        HomeScreen(previewState, {}, {}, {}, {}, {}, {})
     }
 }
 
@@ -464,8 +464,6 @@ private fun HomeEmptyPreview() {
             onOpenServices = {},
             onOpenDownloads = {},
             onOpenLink = {},
-            onToggleChecklist = {},
-            onSaveTodos = {},
         )
     }
 }

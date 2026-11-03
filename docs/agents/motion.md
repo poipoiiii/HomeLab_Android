@@ -11,6 +11,18 @@
 5. 用户点「确认生成」才真正提交；模型自己不能触发渲染。
 6. 提交后自动切到「任务」，显示进度、播放、保存、删除。
 
+## 小砂糖集成
+
+- 小砂糖也能直接做视频，不需要先打开视频页：
+  - `plan_video`：把一句话交给 `MotionDirector`，返回追问（`status=ask`）或方案摘要（`status=plan`）；方案暂存在 `AppContainer.motionPlans`。
+  - `render_video`：只在用户明确确认方案后提交；模型不能自己触发渲染。
+  - `list_video_jobs`：查最近任务状态与进度。
+  - `save_video_result`：把成片保存到相册，并把服务端封面挂到对话。
+  - `cancel_video_job`：按用户明确要求取消任务。
+- `MotionPlanStore` 跨轮次保存导演对话、上一版方案和待确认方案；它和视频页的 `MotionViewModel` 状态分开，互不覆盖。清空对话时一起 reset。
+- 视频服务地址/Token 仍走视频页的 `MotionPrefs`；默认值由 `HomelabApp/local.properties` 的 `motion.url` / `motion.token` 在构建期注入，装好即可用，只有换服务时才需要改。没配置时工具返回 `not_configured`，引导去 视频页 → 设置。
+- 对话里只给方案摘要，不贴 JSON、不内嵌播放器；成片在视频页播放，或保存后用系统相册打开。
+
 ## 提示词
 
 - 提示词在 [MotionDirectorPrompt.kt](../../../HomelabApp/app/src/main/java/com/poi/homelab/feature/motion/MotionDirectorPrompt.kt)，运行时拼上「上一版方案 + 对话历史 + 新消息」。

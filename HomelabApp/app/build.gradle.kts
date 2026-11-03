@@ -17,6 +17,9 @@ val defaultHomarrUrl = localProperties.getProperty("homarr.url").orEmpty().trim(
 // AI 修图默认连接家里网关：build 时从 local.properties 注入，仓库里不出现地址/Token。
 val defaultImageEditUrl = localProperties.getProperty("imageedit.url").orEmpty().trim()
 val defaultImageEditToken = localProperties.getProperty("imageedit.token").orEmpty().trim()
+// 视频服务同样构建期注入，仓库里不出现地址/Token。
+val defaultMotionUrl = localProperties.getProperty("motion.url").orEmpty().trim()
+val defaultMotionToken = localProperties.getProperty("motion.token").orEmpty().trim()
 
 android {
     namespace = "com.poi.homelab"
@@ -35,6 +38,8 @@ android {
         buildConfigField("String", "DEFAULT_HOMARR_URL", "\"$defaultHomarrUrl\"")
         buildConfigField("String", "DEFAULT_IMAGE_EDIT_URL", "\"$defaultImageEditUrl\"")
         buildConfigField("String", "DEFAULT_IMAGE_EDIT_TOKEN", "\"$defaultImageEditToken\"")
+        buildConfigField("String", "DEFAULT_MOTION_URL", "\"$defaultMotionUrl\"")
+        buildConfigField("String", "DEFAULT_MOTION_TOKEN", "\"$defaultMotionToken\"")
     }
 
     // 本机 keystore 不入库；缺失时回退到 AGP 默认 debug 签名，保证干净 clone 也能构建

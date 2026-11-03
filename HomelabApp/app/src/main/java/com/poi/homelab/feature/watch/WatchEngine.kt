@@ -19,6 +19,7 @@ class WatchEngine(
     private val context: Context,
     private val store: WatchStore = WatchStore(context),
     private val cbg: CbgRepository = CbgRepository(),
+    private val rail: RailRepository = RailRepository(),
 ) {
 
     private data class RuleRun(
@@ -33,10 +34,9 @@ class WatchEngine(
             val now = System.currentTimeMillis()
             val targets = current.rules.filter { rule ->
                 rule.enabled &&
-                    rule.target.equipType.isNotBlank() &&
                     (ruleId == null || rule.id == ruleId) &&
-                    (force || rule.lastRunAt <= 0L ||
-                        now - rule.lastRunAt >= rule.intervalMinutes * 60_000L)
+                    (if (rule.isTrain) rule.train.valid else rule.target.equipType.isNotBlank()) &&
+                    (force || isDue(rule, now))
             }
             if (targets.isEmpty()) {
                 WatchAlarm.scheduleNext(context)
@@ -47,8 +47,15 @@ class WatchEngine(
             val runs = mutableMapOf<String, RuleRun>()
             val totals = mutableMapOf<String, Int>()
             val hits = mutableListOf<Pair<WatchRule, List<WatchItem>>>()
+            val trainAlerts = mutableListOf<Pair<WatchRule, List<String>>>()
 
             for (rule in targets) {
+                if (rule.isTrain) {
+                    val result = queryTrain(rule, now, errors)
+                    runs[rule.id] = result.first
+                    result.second?.let { trainAlerts += rule to it }
+                    continue
+                }
                 val items = try {
                     cbg.query(rule)
                 } catch (error: Exception) {
@@ -73,7 +80,7 @@ class WatchEngine(
             }
 
             var notified = 0
-            if (hits.isNotEmpty()) {
+            if (hits.isNotEmpty() || trainAlerts.isNotEmpty()) {
                 if (!WatchNotifier.canNotify(context)) {
                     errors += "通知权限未开启，结果未提醒"
                 } else {
@@ -86,14 +93,19 @@ class WatchEngine(
                         )
                         notified += items.size
                     }
+                    trainAlerts.forEach { (rule, lines) ->
+                        WatchNotifier.notifyTrain(context, rule, lines)
+                        notified += 1
+                    }
                 }
             }
 
             val updated = current.rules.map { rule ->
                 val run = runs[rule.id] ?: return@map rule
+                val hit = hits.any { it.first.id == rule.id } || trainAlerts.any { it.first.id == rule.id }
                 rule.copy(
                     lastRunAt = run.at,
-                    lastHitAt = if (hits.any { it.first.id == rule.id }) run.at else rule.lastHitAt,
+                    lastHitAt = if (hit) run.at else rule.lastHitAt,
                     seen = run.seen,
                     lastResult = run.result,
                 )
@@ -104,11 +116,55 @@ class WatchEngine(
             val text = buildString {
                 append("检查 ${targets.size} 条规则")
                 if (hits.isNotEmpty()) append("，命中 ${hits.sumOf { it.second.size }} 件")
+                if (trainAlerts.isNotEmpty()) append("，${trainAlerts.size} 条车票")
                 if (notified > 0) append("，已发送通知")
                 if (errors.isNotEmpty()) append("；").append(errors.first())
             }
             WatchReport(targets.size, hits.sumOf { it.second.size }, notified, text)
         }
+
+    /** 固定每天几点跑的规则，用 12 小时间隔判断是否已经跑过，避免手动检测后当天重跑。 */
+    private fun isDue(rule: WatchRule, now: Long): Boolean {
+        if (rule.dailyHour == null) {
+            return rule.lastRunAt <= 0L || now - rule.lastRunAt >= rule.intervalMinutes * 60_000L
+        }
+        return rule.lastRunAt <= 0L || now - rule.lastRunAt >= 12 * 60L * 60_000L
+    }
+
+    /** 火车票：查最近假期首日前一天和末日次日，各取最低价。 */
+    private suspend fun queryTrain(
+        rule: WatchRule,
+        now: Long,
+        errors: MutableList<String>,
+    ): Pair<RuleRun, List<String>?> {
+        val holiday = HolidayCalendar.nearest()
+        if (holiday == null) {
+            errors += "${rule.displayTitle}：节假日数据获取失败"
+            return RuleRun(now, rule.seen, "节假日数据获取失败") to null
+        }
+        val dates = listOf(holiday.start.minusDays(1), holiday.end.plusDays(1))
+        val lines = mutableListOf<String>()
+        var queried = false
+        dates.forEach { date ->
+            val quotes = runCatching { rail.quotes(rule.train, date) }.getOrElse { error ->
+                errors += "${rule.displayTitle} ${date}：${error.message ?: "查询失败"}"
+                emptyList()
+            }
+            if (quotes.isNotEmpty()) queried = true
+            val best = quotes.minByOrNull { it.priceYuan }
+            lines += if (best == null) {
+                "${date.monthValue}月${date.dayOfMonth}日 暂无可售"
+            } else {
+                "${date.monthValue}月${date.dayOfMonth}日 ¥${best.priceYuan}（${best.trainCode} ${best.startTime}）"
+            }
+        }
+        val summary = "${holiday.name}：" + lines.joinToString("；")
+        return if (queried) {
+            RuleRun(now, rule.seen, summary) to lines
+        } else {
+            RuleRun(now, rule.seen, "查询失败") to null
+        }
+    }
 
     companion object {
         /** 闹钟和开机广播里没有 AppContainer，这里按默认依赖重新组装。 */
@@ -127,16 +183,14 @@ object WatchAlarm {
     suspend fun scheduleNext(context: Context, settings: WatchSettings? = null) {
         val appContext = context.applicationContext
         val rules = (settings ?: WatchStore(appContext).load()).rules
-            .filter { it.enabled && it.target.equipType.isNotBlank() }
+            .filter { it.enabled && (if (it.isTrain) it.train.valid else it.target.equipType.isNotBlank()) }
         val alarm = appContext.getSystemService(AlarmManager::class.java) ?: return
         val pending = pendingIntent(appContext)
         alarm.cancel(pending)
         if (rules.isEmpty()) return
 
         val now = System.currentTimeMillis()
-        val due = rules.minOf { rule ->
-            if (rule.lastRunAt <= 0L) now + 60_000L else rule.lastRunAt + rule.intervalMinutes * 60_000L
-        }
+        val due = rules.minOf { rule -> nextTrigger(rule, now) }
         val trigger = maxOf(due, now + 30_000L)
         val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarm.canScheduleExactAlarms()
         if (exact) {
@@ -150,6 +204,22 @@ object WatchAlarm {
     fun cancel(context: Context) {
         val alarm = context.getSystemService(AlarmManager::class.java) ?: return
         alarm.cancel(pendingIntent(context.applicationContext))
+    }
+
+    /** 固定时间的规则排到下一个整点，其余按上次检测 + 间隔。 */
+    private fun nextTrigger(rule: WatchRule, now: Long): Long {
+        val hour = rule.dailyHour
+        if (hour != null) {
+            val calendar = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, hour.coerceIn(0, 23))
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+                if (timeInMillis <= now) add(java.util.Calendar.DAY_OF_YEAR, 1)
+            }
+            return calendar.timeInMillis
+        }
+        return if (rule.lastRunAt <= 0L) now + 60_000L else rule.lastRunAt + rule.intervalMinutes * 60_000L
     }
 
     private fun pendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(

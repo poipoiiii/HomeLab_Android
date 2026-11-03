@@ -53,6 +53,18 @@ object WatchNotifier {
         )
     }
 
+    fun notifyTrain(context: Context, rule: WatchRule, lines: List<String>) {
+        if (lines.isEmpty()) return
+        ensureChannel(context)
+        post(
+            context = context,
+            id = rule.id.hashCode(),
+            title = "火车票 ${rule.train.route} · ${seatLabel(rule.train.seat)}",
+            text = lines.first(),
+            expanded = lines.joinToString("\n"),
+        )
+    }
+
     fun notifyTest(context: Context) {
         ensureChannel(context)
         post(

@@ -63,6 +63,8 @@ data class AppSettings(
     val token: String = "",
     val deviceName: String = Build.MODEL.orEmpty(),
     val themeMode: String = "system",
+    /** 全局配色风格：sand / tide / dusk / moss，见 core/ui/theme/Theme.kt。 */
+    val themeStyle: String = "sand",
     val aiProviders: List<AiProvider> = defaultAiProviders(),
     val aiSelectedId: String = "deepseek",
     val fileTreeUris: List<String> = emptyList(),
@@ -111,6 +113,7 @@ class SettingsStore(private val context: Context) {
         val TOKEN = stringPreferencesKey("api_token")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val THEME_STYLE = stringPreferencesKey("theme_style")
         val AI_PROVIDERS = stringPreferencesKey("ai_providers")
         val AI_SELECTED = stringPreferencesKey("ai_selected")
         val FILE_TREE_URIS = stringPreferencesKey("file_tree_uris")
@@ -172,6 +175,7 @@ class SettingsStore(private val context: Context) {
                 token = prefs[Keys.TOKEN].orEmpty(),
                 deviceName = prefs[Keys.DEVICE_NAME] ?: Build.MODEL.orEmpty(),
                 themeMode = prefs[Keys.THEME_MODE] ?: "system",
+                themeStyle = prefs[Keys.THEME_STYLE] ?: "sand",
                 aiProviders = providers,
                 aiSelectedId = prefs[Keys.AI_SELECTED]
                     ?.takeIf { id -> providers.any { it.id == id } }
@@ -236,6 +240,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.TOKEN] = value.token.trim()
             prefs[Keys.DEVICE_NAME] = value.deviceName.trim()
             prefs[Keys.THEME_MODE] = value.themeMode
+            prefs[Keys.THEME_STYLE] = value.themeStyle
             prefs[Keys.AI_PROVIDERS] = settingsJson.encodeToString(value.aiProviders)
             prefs[Keys.AI_SELECTED] = value.aiSelectedId
             prefs[Keys.FILE_TREE_URIS] = settingsJson.encodeToString(value.fileTreeUris)

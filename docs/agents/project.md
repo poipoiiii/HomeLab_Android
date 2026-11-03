@@ -22,10 +22,11 @@
 
 ## 导航与全局外观
 
-- 导航：不再用底部导航。左上角头像（总览页复用标题头像，其余页面顶部单独一行）打开左侧 `HomelabDrawer`，抽屉里有全部页面入口和「今日清单」；返回键在非总览页先回总览，只有在总览页连按两次才退出。脱机时（`UiState.labReachability` 不是 Online）服务 / 账单两项置灰并标「脱机不可用」，不能点进去；总览、日历、小砂糖、下载、设置仍然可用。
-- AI 修图：入口在设置页「小砂糖」分组、首页右下快捷面板、AI 页空状态，三处都调用 `MainViewModel.openImageEdit()`；`AppRoot` 用 `state.imageEdit.open / settingsOpen` 做全屏 overlay（不进抽屉 Tab），关页即停止轮询，任务继续在服务端跑。
-- 视频：抽屉「视频」Tab 默认是「AI 导演」聊天（一句需求 → 追问 → 方案卡 → 确认生成），「手动」页保留原表单；配置存独立 SharedPreferences `homelab_motion`。细节见 [motion.md](motion.md)。
+- 导航：不再用底部导航。左上角头像（总览页复用标题头像，其余页面顶部单独一行）打开左侧 `HomelabDrawer`，抽屉里有页面入口和「今日清单」，设置不占抽屉条目，改放抽屉顶部的齿轮（头像右侧）；返回键在非总览页先回总览，只有在总览页连按两次才退出。日历条目改名「日程」，视频条目改名「AI-Web-Video」；下载条目置灰并标「开发中」，先禁用。脱机时（`UiState.labReachability` 不是 Online）服务 / 账单两项置灰并标「脱机不可用」，不能点进去；总览、日程、小砂糖、设置仍然可用。
+- AI 修图：入口在设置页「小砂糖」分组、AI 页顶部「AI 修图」子服务、小砂糖页空状态，都调用 `MainViewModel.openImageEdit()`；`AppRoot` 用 `state.imageEdit.open / settingsOpen` 做全屏 overlay（不进抽屉 Tab），关页即停止轮询，任务继续在服务端跑。
+- 视频：抽屉「AI-Web-Video」Tab 默认是「AI 导演」聊天（一句需求 → 追问 → 方案卡 → 确认生成），「手动」页保留原表单；配置存独立 SharedPreferences `homelab_motion`。细节见 [motion.md](motion.md)。
 - 首页壁纸：资源 `res/drawable-nodpi/home_wallpaper.webp`（源 `static/pictures/4.jpeg`，文件实际是 WebP）。是否显示与参数存 `AppSettings.showWallpaper` / `wallpaperOpacity`（0.05..0.9，默认 0.22）/ `wallpaperDim`（0..0.8，默认 0.5）。壁纸是全局的：由 `AppRoot.WallpaperBackdrop` 铺在所有页面（含 AI 配置页）之后，`Scaffold` 用透明底色；不要再在单个页面里画壁纸。卡片与左侧导航抽屉统一用 `CardSurfaceAlpha`（0.78，`core/ui/theme/Color.kt`）透出背景。设置页「外观与首页」卡片提供开关与两个滑杆；`showLedgerOnHome` 控制首页是否展示账本区。
+- 配色风格：`AppSettings.themeStyle` 存 `sand / tide / dusk / moss`，对应「暖沙 / 潮汐 / 暮光 / 苔原」四套 light + dark ColorScheme，定义在 `core/ui/theme/Theme.kt` 的 `appThemeStyles`；设置页「外观与首页 → 配色」用带三色圆点的 chip 切换，`MainActivity` 把 `themeStyle` 传给 `HomelabTheme`。新增风格时同时补 light/dark 两套色和 `appThemeStyles` 条目。
 - 启动动效：`core/ui/components/LaunchSplash.kt`，由 `MainActivity` 包裹主界面。启动页支持全屏「轻触跳过」，3 秒后自动结束；遮罩淡出时用 `contentAlpha`（650ms）让主界面内容从透明缓缓浮现。
 
 ## 首页
@@ -39,7 +40,7 @@
 
 ## 设置页
 
-分组顺序：`外观与首页`（主题 + 介绍模式同卡、全局壁纸、显示账本、首页天气城市）→ `连接`（Lab Tools / 账本 / Homarr / Cloudreve / Token / 设备名 + 保存、测试并排；已填好的连接项默认折叠成一行摘要，点「修改」再展开）→ `小砂糖`（AI 配置、可搜索目录）→ `权限`（自动化 / 使用情况 / 相册 / 通知与短信采集）→ `关于`。新增设置项按这个分组放，别再平铺新卡片。
+分组顺序：`外观与首页`（主题深浅、四套配色风格、介绍模式同卡、全局壁纸、显示账本、首页天气城市）→ `连接`（Lab Tools / 账本 / Homarr / Cloudreve / Token / 设备名 + 保存、测试并排；已填好的连接项默认折叠成一行摘要，点「修改」再展开）→ `小砂糖`（AI 配置、可搜索目录）→ `权限`（自动化 / 使用情况 / 相册 / 通知与短信采集）→ `关于`。新增设置项按这个分组放，别再平铺新卡片。
 
 介绍模式：`AppSettings.settingsDetailed`（默认 true）控制「详细 / 简略」；简略模式下 `SettingHint` 全部隐藏且不留空行，只保留标题、输入框与开关。
 

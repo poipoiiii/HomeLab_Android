@@ -21,10 +21,13 @@ import com.poi.homelab.feature.lab.McpClient
 import com.poi.homelab.feature.market.MarketMindStore
 import com.poi.homelab.feature.market.MarketRepository
 import com.poi.homelab.feature.motion.MotionClient
+import com.poi.homelab.feature.motion.MotionDirector
+import com.poi.homelab.feature.motion.MotionPlanStore
 import com.poi.homelab.feature.motion.MotionRepository
 import com.poi.homelab.feature.photos.CloudreveRepository
 import com.poi.homelab.feature.weather.WeatherRepository
 import com.poi.homelab.feature.watch.CbgRepository
+import com.poi.homelab.feature.watch.RailRepository
 import com.poi.homelab.feature.watch.WatchEngine
 import com.poi.homelab.feature.watch.WatchStore
 import java.util.concurrent.TimeUnit
@@ -71,8 +74,11 @@ class AppContainer(context: android.content.Context) {
     val device = MqttDeviceRepository(appContext, json)
     val market = MarketRepository(http, json)
     val motion = MotionRepository(MotionClient(http, json), deviceTools, appContext)
+    val motionDirector = MotionDirector(json)
+    val motionPlans = MotionPlanStore()
     val marketMind = MarketMindStore(appContext)
     val watch = WatchStore(appContext)
     val cbg = CbgRepository()
-    val watchEngine = WatchEngine(appContext, watch, cbg)
+    val rail = RailRepository()
+    val watchEngine = WatchEngine(appContext, watch, cbg, rail)
 }

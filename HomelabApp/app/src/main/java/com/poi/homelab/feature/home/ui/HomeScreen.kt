@@ -1,18 +1,17 @@
 package com.poi.homelab.feature.home.ui
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,7 +43,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,7 +51,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -99,24 +100,21 @@ import com.poi.homelab.feature.device.ui.DeviceCard
 import com.poi.homelab.feature.homarr.resolveHomarrUrl
 import com.poi.homelab.feature.homarr.stringValue
 import com.poi.homelab.feature.homarr.ui.HomarrBoardGrid
-import com.poi.homelab.feature.homarr.ui.InlinePage
 import com.poi.homelab.feature.homarr.WeatherQuery
 import com.poi.homelab.feature.homarr.WeatherSnapshot
-import com.poi.homelab.feature.home.TodoItem
-import com.poi.homelab.feature.home.ui.ChecklistItem
 import com.poi.homelab.feature.home.ui.QuickEntryPager
 import com.poi.homelab.feature.home.ui.StackCard
 import com.poi.homelab.feature.lab.HealthSnapshot
 import com.poi.homelab.feature.market.MarketSearchResult
 import com.poi.homelab.feature.market.MarketSymbol
 import com.poi.homelab.feature.market.ui.MarketCard
+import com.poi.homelab.feature.market.ui.PinnedMarketRow
 import com.poi.homelab.feature.market.ui.MarketEditorSheet
 import com.poi.homelab.navigation.UiState
 import com.poi.homelab.R
 import java.net.URI
 import java.time.LocalDate
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,14 +126,11 @@ fun HomeScreen(
     onOpenServices: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenLink: (String) -> Unit,
-    onToggleChecklist: (String) -> Unit,
-    onSaveTodos: (List<TodoItem>) -> Unit,
     onLoadWeather: suspend (WeatherQuery) -> WeatherSnapshot? = { null },
-    onOpenFiles: () -> Unit = {},
     onOpenCalendar: () -> Unit = {},
-    onOpenImageEdit: () -> Unit = {},
     onLoadDeviceUsage: () -> Unit = {},
     onOpenMenu: () -> Unit = {},
+    onOpenAi: () -> Unit = {},
     onRefreshMarket: () -> Unit = {},
     onSearchMarket: suspend (String) -> List<MarketSearchResult> = { emptyList() },
     onSaveMarketSymbols: (List<MarketSymbol>, Boolean) -> Unit = { _, _ -> },
@@ -148,25 +143,12 @@ fun HomeScreen(
     val needsSetup = settings.labUrl.isBlank() && settings.billUrl.isBlank()
     // 探测已配置地址失败时进「脱机模式」，具体是没连 VPN 还是主机休眠由 ReachabilityProbe 判定
     val offline = state.labReachability?.online == false
-    val todoItems = state.todos.map { ChecklistItem(it.id, it.label) }
-    var powerOpen by rememberSaveable { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val doneCount = todoItems.count { it.id in state.checkedToday }
-    var quickSheetOpen by rememberSaveable { mutableStateOf(false) }
     var moreExpanded by rememberSaveable { mutableStateOf(false) }
     var marketEditOpen by rememberSaveable { mutableStateOf(false) }
     var awaySheetOpen by rememberSaveable { mutableStateOf(false) }
     var marketExpanded by rememberSaveable { mutableStateOf(false) }
-    val quickSheetState = rememberModalBottomSheetState()
-    val closeSheetThen: (() -> Unit) -> Unit = { action ->
-        scope.launch {
-            quickSheetState.hide()
-            quickSheetOpen = false
-            action()
-        }
-    }
 
-    // Homarr 上的电源 iframe 移到右侧面板，避免在看板里占一大块
+    // Homarr 上的电源 iframe 在「服务」页单独打开，避免在看板里占一大块
     val powerIframe = remember(state.board, settings.homarrUrl) {
         state.board?.items?.firstOrNull { item ->
             item.kind == "iframe" && (
@@ -176,23 +158,16 @@ fun HomeScreen(
                 )
         }
     }
-    val powerUrl = remember(powerIframe, settings.homarrUrl) {
-        powerIframe?.let {
-            resolveHomarrUrl(settings.homarrUrl, it.options.stringValue("embedUrl"))
-        }
-    }
     val powerSkipIds = remember(powerIframe) {
         powerIframe?.id?.let { setOf(it) } ?: emptySet()
     }
-
-    BackHandler(enabled = powerOpen && powerUrl != null) { powerOpen = false }
 
     // 设备排行要扫已安装应用，展开「更多」时才拉一次
     LaunchedEffect(moreExpanded) {
         if (moreExpanded) onLoadDeviceUsage()
     }
 
-    // 行情默认折叠，折叠时不刷新；展开后按设置间隔轮询，退到后台就停
+    // 大盘要一直看得到：折叠时也按间隔刷新；退到后台（非 RESUMED）就停
     val lifecycleOwner = LocalLifecycleOwner.current
     val inspection = LocalInspectionMode.current
     // 设备卡片只在一张首页可见时连 broker；Preview 里没有 AppContainer，直接给空状态
@@ -213,8 +188,8 @@ fun HomeScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { deviceVm?.onVisible() }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { deviceVm?.onHidden() }
     val marketRefreshMs = settings.marketRefreshSeconds.coerceIn(10, 300) * 1000L
-    LaunchedEffect(lifecycleOwner, inspection, marketRefreshMs, marketExpanded) {
-        if (inspection || !marketExpanded) return@LaunchedEffect
+    LaunchedEffect(lifecycleOwner, inspection, marketRefreshMs) {
+        if (inspection) return@LaunchedEffect
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 onRefreshMarket()
@@ -244,29 +219,52 @@ fun HomeScreen(
                 )
             }
 
-            // 行情置顶：默认折叠，折叠时不轮询刷新
+            // 行情置顶：折叠时只露出大盘一行，展开后显示完整自选
             item {
                 Column(Modifier.fillMaxWidth()) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = CardSurfaceAlpha))
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                            .clickable { marketExpanded = !marketExpanded }
-                            .padding(horizontal = 14.dp, vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
                     ) {
-                        Text(
-                            text = "行情",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = if (marketExpanded) "收起" else "展开",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { marketExpanded = !marketExpanded }
+                                .padding(horizontal = 14.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "行情",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = if (marketExpanded) "收起" else "展开",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        if (!marketExpanded) {
+                            if (state.marketQuotes.isEmpty() && state.marketLoading) {
+                                Text(
+                                    text = "正在取大盘…",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                                )
+                            } else {
+                                PinnedMarketRow(
+                                    symbols = settings.marketPinnedSymbols,
+                                    quotes = state.marketQuotes,
+                                    onOpen = onOpenMarketSymbol,
+                                    onPreview = onPreviewMarketSymbol,
+                                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                                )
+                            }
+                        }
                     }
                     if (marketExpanded) {
                         Spacer(Modifier.height(10.dp))
@@ -458,46 +456,12 @@ fun HomeScreen(
             }
             item { AdOffCard() }
         }
-        if (powerUrl != null) {
-            AnimatedVisibility(
-                visible = powerOpen,
-                enter = fadeIn(tween(200)),
-                exit = fadeOut(tween(150)),
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) { powerOpen = false },
-                )
-            }
-            AnimatedVisibility(
-                visible = powerOpen,
-                modifier = Modifier.align(Alignment.CenterEnd),
-                enter = slideInHorizontally(tween(260)) { it },
-                exit = slideOutHorizontally(tween(220)) { it },
-            ) {
-                PowerPanel(
-                    url = powerUrl,
-                    onClose = { powerOpen = false },
-                    onOpenFull = {
-                        powerOpen = false
-                        onOpenLink(powerUrl)
-                    },
-                )
-            }
-        }
-        if (!powerOpen) {
-            QuickPanelFab(
-                onClick = { quickSheetOpen = true },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = 18.dp),
-            )
-        }
+        AiFab(
+            onClick = onOpenAi,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 18.dp),
+        )
         if (awaySheetOpen) {
             val awaySheetState = rememberModalBottomSheetState()
             ModalBottomSheet(
@@ -522,45 +486,6 @@ fun HomeScreen(
                 }
             }
         }
-        if (quickSheetOpen) {
-            ModalBottomSheet(
-                onDismissRequest = { quickSheetOpen = false },
-                sheetState = quickSheetState,
-                containerColor = MaterialTheme.colorScheme.surface,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
-                ) {
-                    QuickActionRow(
-                        title = "今天清单",
-                        subtitle = "完成 $doneCount/${todoItems.size} 项",
-                        onClick = { closeSheetThen(onOpenMenu) },
-                    )
-                    ThinDivider()
-                    QuickActionRow(
-                        title = "文件洞察",
-                        subtitle = "扫描本机文件，让小砂糖分析",
-                        onClick = { closeSheetThen(onOpenFiles) },
-                    )
-                    ThinDivider()
-                    QuickActionRow(
-                        title = "AI 修图",
-                        subtitle = "选照片，一句话换背景 / 去路人",
-                        onClick = { closeSheetThen(onOpenImageEdit) },
-                    )
-                    if (powerUrl != null) {
-                        ThinDivider()
-                        QuickActionRow(
-                            title = "电源面板",
-                            subtitle = "容器启停、内存与磁盘",
-                            onClick = { closeSheetThen { powerOpen = true } },
-                        )
-                    }
-                }
-            }
-        }
         if (marketEditOpen) {
             MarketEditorSheet(
                 symbols = settings.marketSymbols,
@@ -577,98 +502,104 @@ fun HomeScreen(
     }
 }
 
-/** 右侧电源面板：直接嵌入 Homarr 里配置的 iframe 地址。 */
+/** 右下角的小砂糖头像：呼吸 + 霓虹描边，点一下进 AI 页。 */
 @Composable
-private fun PowerPanel(
-    url: String,
-    onClose: () -> Unit,
-    onOpenFull: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxHeight().fillMaxWidth(0.92f),
-        shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("电源面板", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = url.substringAfter("://").substringBefore('/').substringBefore('?'),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                InlineAction("全屏", onOpenFull)
-                InlineAction("关闭", onClose)
-            }
-            ThinDivider()
-            InlinePage(
-                url = url,
-                modifier = Modifier.fillMaxSize(),
-                focusable = true,
-            )
-        }
-    }
-}
-
-/** 右下角的「面板」入口：整屏只有一个触点，点开再选清单还是电源。 */
-@Composable
-private fun QuickPanelFab(
+private fun AiFab(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
-        modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-        shadowElevation = 6.dp,
-    ) {
-        Text(
-            text = "面板",
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
-        )
-    }
-}
+    val primary = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.secondary
+    val tertiary = MaterialTheme.colorScheme.tertiary
+    val transition = rememberInfiniteTransition(label = "ai-fab")
+    val breath by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.045f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "breath",
+    )
+    val halo by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "halo",
+    )
+    val spin by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(7000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "spin",
+    )
 
-@Composable
-private fun QuickActionRow(
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-        }
-        Text(
-            text = "打开",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        // 外圈光晕：跟着呼吸一起明暗起伏
+        Box(
+            modifier = Modifier
+                .size(78.dp)
+                .graphicsLayer {
+                    scaleX = breath * 1.08f
+                    scaleY = breath * 1.08f
+                    alpha = halo
+                }
+                .drawBehind {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                primary.copy(alpha = 0.55f),
+                                primary.copy(alpha = 0.14f),
+                                Color.Transparent,
+                            ),
+                        ),
+                        radius = size.minDimension / 2f,
+                    )
+                },
         )
+        Surface(
+            onClick = onClick,
+            modifier = Modifier
+                .size(56.dp)
+                .graphicsLayer {
+                    scaleX = breath
+                    scaleY = breath
+                },
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, primary.copy(alpha = 0.55f + halo * 0.35f)),
+            shadowElevation = 10.dp,
+        ) {
+            Box(Modifier.fillMaxSize().padding(3.dp)) {
+                Image(
+                    painter = painterResource(R.drawable.ai_avatar),
+                    contentDescription = "小砂糖",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(CircleShape),
+                )
+                // 内圈霓虹：三色扫光慢慢旋转，像呼吸灯边缘的光
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .drawBehind {
+                            rotate(spin) {
+                                drawCircle(
+                                    brush = Brush.sweepGradient(
+                                        listOf(primary, tertiary, secondary, primary),
+                                    ),
+                                    style = Stroke(width = 1.5.dp.toPx()),
+                                )
+                            }
+                        },
+                )
+            }
+        }
     }
 }
 
@@ -933,7 +864,7 @@ private fun AdOffCard() {
     }
 }
 
-/** 本月账本：并排小卡，只留支出大数字 + 收入/结余一行。 */
+/** 本月账本：并排小卡，大数字显示本月结余（净值），下面一行补收入与支出。 */
 @Composable
 private fun LedgerTile(
     state: UiState,
@@ -950,19 +881,33 @@ private fun LedgerTile(
             .clickable(onClick = onOpenBills)
             .padding(16.dp),
     ) {
-        Text("本月账本", style = MaterialTheme.typography.labelMedium, color = OnDarkSoft)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("本月账本", style = MaterialTheme.typography.labelMedium, color = OnDarkSoft)
+            if (overview != null) {
+                Text(
+                    text = "结余",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = OnDarkSoft,
+                )
+            }
+        }
         when {
             overview != null -> {
+                val net = overview.monthStats.net.replace(",", "").toDoubleOrNull() ?: 0.0
                 Text(
-                    text = money(overview.monthStats.expense),
+                    text = if (net < 0) "−${money(-net)}" else money(net),
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Color(0xFFE7A48C),
+                    color = if (net < 0) Color(0xFFE7A48C) else Color(0xFF9FD3AD),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 6.dp),
                 )
                 Text(
-                    text = "支出 · 收 ${money(overview.monthStats.income)} · 结 ${money(overview.monthStats.net)}",
+                    text = "收 ${money(overview.monthStats.income)} · 支 ${money(overview.monthStats.expense)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = OnDarkSoft,
                     maxLines = 2,
@@ -1047,7 +992,7 @@ private fun ScheduleTile(
         }
         Spacer(Modifier.weight(1f))
         Text(
-            text = "打开日历",
+            text = "打开日程",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(top = 10.dp),

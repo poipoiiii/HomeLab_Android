@@ -22,7 +22,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: MainViewModel = viewModel(factory = MainViewModel.Factory(container))
             val state by viewModel.state.collectAsStateWithLifecycle()
-            HomelabTheme(themeMode = state.settings.themeMode) {
+            HomelabTheme(
+                themeMode = state.settings.themeMode,
+                themeStyle = state.settings.themeStyle,
+            ) {
                 LaunchSplashHost {
                     HomelabApp(viewModel)
                 }

@@ -51,6 +51,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
@@ -133,13 +134,13 @@ private enum class Tab(
 ) {
     Home("总览", R.drawable.ic_home),
     Market("行情", R.drawable.ic_chart),
-    Calendar("日历", R.drawable.ic_calendar),
+    Calendar("日程", R.drawable.ic_calendar),
     Services("服务", R.drawable.ic_server),
     Bills("账单", R.drawable.ic_receipt),
     Watch("监控", R.drawable.ic_watch),
     Ai("小砂糖", R.drawable.ic_ai),
     Downloads("下载", R.drawable.ic_download),
-    Motion("视频", R.drawable.ic_motion),
+    Motion("AI-Web-Video", R.drawable.ic_motion),
     Settings("设置", R.drawable.ic_settings),
 }
 
@@ -262,6 +263,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                 onSelect = { openTab(it) },
                 onToggle = viewModel::toggleChecklist,
                 onEditTodos = { todoEditorOpen = true },
+                onOpenSettings = { openTab(Tab.Settings) },
             )
         },
     ) {
@@ -295,14 +297,11 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onOpenServices = { openTab(Tab.Services) },
                     onOpenDownloads = { openTab(Tab.Downloads) },
                     onOpenLink = { browserUrl = it },
-                    onToggleChecklist = viewModel::toggleChecklist,
-                    onSaveTodos = viewModel::saveTodos,
                     onLoadWeather = viewModel::loadWeather,
-                    onOpenFiles = { fileInsightOpen = true },
                     onOpenCalendar = { openTab(Tab.Calendar) },
-                    onOpenImageEdit = viewModel::openImageEdit,
                     onLoadDeviceUsage = viewModel::loadDeviceUsage,
                     onOpenMenu = { scope.launch { drawerState.open() } },
+                    onOpenAi = { openTab(Tab.Ai) },
                     onRefreshMarket = viewModel::refreshMarket,
                     onSearchMarket = viewModel::searchMarket,
                     onSaveMarketSymbols = viewModel::saveMarketSymbols,
@@ -348,6 +347,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onRefresh = viewModel::refreshHealth,
                     onAction = viewModel::requestServiceAction,
                     onLogs = viewModel::loadLogs,
+                    onOpenLink = { browserUrl = it },
                 )
                 Tab.Bills -> BillsScreen(
                     state = state,
@@ -367,6 +367,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onToggleRule = viewModel::toggleWatchRule,
                     onRunNow = viewModel::runWatchNow,
                     onLoadTypes = viewModel::loadWatchTypes,
+                    onLoadStations = viewModel::loadRailStations,
                 )
                 Tab.Ai -> AiScreen(
                     state = state,
@@ -374,6 +375,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onClear = viewModel::clearChat,
                     onOpenAiSettings = { aiConfigOpen = true },
                     onOpenImageEdit = viewModel::openImageEdit,
+                    onOpenFiles = { fileInsightOpen = true },
                     onRefreshBalance = viewModel::refreshAiBalance,
                     onChooseUploadDir = viewModel::startPendingUpload,
                     onCancelUpload = viewModel::cancelPendingUpload,
@@ -388,6 +390,7 @@ fun HomelabApp(viewModel: MainViewModel) {
                     onSave = viewModel::saveSettings,
                     onTest = viewModel::testConnections,
                     onTheme = viewModel::setThemeMode,
+                    onThemeStyle = viewModel::setThemeStyle,
                     onOpenAiSettings = { aiConfigOpen = true },
                     onOpenImageEdit = viewModel::openImageEdit,
                     onOpenImageEditSettings = viewModel::openImageEditSettings,
@@ -545,6 +548,7 @@ private fun HomelabDrawer(
     onSelect: (Tab) -> Unit,
     onToggle: (String) -> Unit,
     onEditTodos: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     ModalDrawerSheet(
         modifier = Modifier.width(320.dp),
@@ -583,14 +587,29 @@ private fun HomelabDrawer(
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_settings),
+                        contentDescription = "设置",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
             Spacer(Modifier.height(14.dp))
             val offline = state.labReachability?.online == false
-            Tab.entries.forEach { tab ->
+            Tab.entries.filter { it != Tab.Settings }.forEach { tab ->
+                val inDevelopment = tab == Tab.Downloads
+                val disabled = inDevelopment || (offline && tab.needsLab())
                 DrawerRow(
                     tab = tab,
                     active = tab == screen,
-                    enabled = !offline || !tab.needsLab(),
+                    enabled = !disabled,
+                    badge = when {
+                        inDevelopment -> "开发中"
+                        offline && tab.needsLab() -> "脱机不可用"
+                        else -> null
+                    },
                     onClick = { onSelect(tab) },
                 )
             }
@@ -615,7 +634,13 @@ private fun HomelabDrawer(
 }
 
 @Composable
-private fun DrawerRow(tab: Tab, active: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun DrawerRow(
+    tab: Tab,
+    active: Boolean,
+    enabled: Boolean,
+    badge: String?,
+    onClick: () -> Unit,
+) {
     val tint = when {
         !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
         active -> MaterialTheme.colorScheme.primary
@@ -656,7 +681,7 @@ private fun DrawerRow(tab: Tab, active: Boolean, enabled: Boolean, onClick: () -
         if (!enabled) {
             Spacer(Modifier.weight(1f))
             Text(
-                text = "脱机不可用",
+                text = badge ?: "脱机不可用",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )

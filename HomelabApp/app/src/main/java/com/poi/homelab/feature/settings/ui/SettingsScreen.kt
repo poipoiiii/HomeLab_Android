@@ -9,8 +9,11 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,16 +22,20 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -62,6 +70,8 @@ import com.poi.homelab.core.ui.components.SuccessButton
 import com.poi.homelab.core.ui.components.ThinDivider
 import com.poi.homelab.core.ui.theme.Danger
 import com.poi.homelab.core.ui.theme.SuccessStrong
+import com.poi.homelab.core.ui.theme.ThemeStyleOption
+import com.poi.homelab.core.ui.theme.appThemeStyles
 import com.poi.homelab.core.util.hasPhotoAccess
 import com.poi.homelab.core.util.hasUsageAccess
 import com.poi.homelab.core.util.photoPermission
@@ -88,6 +98,7 @@ fun SettingsScreen(
     onSave: (AppSettings) -> Unit,
     onTest: () -> Unit,
     onTheme: (String) -> Unit,
+    onThemeStyle: (String) -> Unit = {},
     onOpenAiSettings: () -> Unit,
     onOpenImageEdit: () -> Unit = {},
     onOpenImageEditSettings: () -> Unit = {},
@@ -244,6 +255,31 @@ fun SettingsScreen(
                 ) {
                     THEMES.forEach { (key, label) ->
                         Pill(label, settings.themeMode == key, onClick = { onTheme(key) })
+                    }
+                }
+                ThinDivider(Modifier.padding(vertical = 12.dp))
+                Text("配色", style = MaterialTheme.typography.titleMedium)
+                if (detailed) {
+                    Text(
+                        "换一套界面主色与卡片底色，浅色和深色模式各自适配。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    appThemeStyles.forEach { style ->
+                        ThemeStyleChip(
+                            style = style,
+                            selected = settings.themeStyle == style.id,
+                            onClick = { onThemeStyle(style.id) },
+                        )
                     }
                 }
                 ThinDivider(Modifier.padding(vertical = 12.dp))
@@ -1433,6 +1469,52 @@ private fun PhotoSyncDialog(
             }
         },
     )
+}
+
+@Composable
+private fun ThemeStyleChip(
+    style: ThemeStyleOption,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = BorderStroke(
+            1.dp,
+            if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            },
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            style.swatches.forEachIndexed { index, color ->
+                if (index > 0) Spacer(Modifier.width(3.dp))
+                Box(
+                    Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(color),
+                )
+            }
+            Text(
+                text = style.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(start = 7.dp),
+            )
+        }
+    }
 }
 
 @Composable

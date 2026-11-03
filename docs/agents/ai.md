@@ -17,7 +17,7 @@
 ## 工具集
 
 - `feature/ai/AgentTools.kt`：成员函数加 `@Tool` / `@Param`，KSP（`google-adk-kotlin-processor`）编译期生成 schema 与 `generatedTools()`；不要手写 JSON Schema，也不要恢复 `AiAgent` 里的手写循环。
-- 包含系统资源、应用列表、使用时长/存储排行、SAF 文件搜索、Homelab 健康、账本流水，以及 `find_photos` / `list_recent_photos` / `upload_recent_photos` / `describe_photo` / `generate_image`。
+- 包含系统资源、应用列表、使用时长/存储排行、SAF 文件搜索、Homelab 健康、账本流水，以及 `find_photos` / `list_recent_photos` / `upload_recent_photos` / `describe_photo` / `generate_image`、家里修图工具和 AI 导演视频工具（见下文）。
 - `get_recent_expenses` 支持 `month`（yyyy-MM，默认本月）、`type`（expense/income/transfer）、`minAmount`（整数元）、`limit`（默认 30，最大 200）、`sort`（date/amount）；内部先拉 500 条再本地筛选，避免默认页大小截掉大额记录。
 - 工具调用策略：由 ADK 自动处理 `tool_calls`（`ChatCompletions` 原生函数调用）+ 系统 prompt 约束，不要用关键词/正则硬编码“这句话该不该调工具”；闲聊、常识、写作必须允许直答。
 - `AgentTools` 的 `onPhotos` 回调把找到/识别的照片 uri 挂到工具消息上，AI 页显示缩略图并可点开大图。
@@ -37,6 +37,14 @@
 - 配置项 `imageEditUrl / imageEditToken / imageEditModel / imageEditSteps / imageEditMaxSide / imageEditAutoSave`，Token 只存本机 DataStore；图片只发给家里的网关，不经过对话服务商。
 - Coil 加载结果/输入缩略图时带不上 `Authorization` 头，`ImageEditRepository.thumbUrl` 会把 `?token=` 拼进 URL；服务端两个图片接口都接受 query token。
 
+## 视频生成（AI 导演）
+
+- 上手文档：[motion.md](motion.md)。`MotionRepository` 负责提交/查询/保存，`MotionDirector` 负责把一句话变成追问或严格 JSON 分镜方案。
+- 小砂糖工具：`plan_video`（只出追问或方案摘要，暂存到 `AppContainer.motionPlans`）、`render_video`（用户明确确认后才提交）、`list_video_jobs`（只读）、`save_video_result`（下载成片进相册，并把封面挂到对话）、`cancel_video_job`。
+- `MotionPlanStore` 跨轮次保存导演对话、上一版方案和待确认方案；每次 `sendChat` 都会新建 `AgentTools`，状态不能放工具实例里。清空对话时 `MainViewModel.clearChat` 会同时 reset。
+- 确认规则：`plan_video` 返回 `status=plan` 后必须先给用户看方案摘要；只有用户说“确认/可以/开始/就这个/生成吧”才能调用 `render_video`。模型不能自己触发渲染。
+- 视频服务地址/Token 走视频页自己的 `MotionPrefs`，不塞进 AI 服务商配置；默认值由 `local.properties` 的 `motion.url` / `motion.token` 构建期注入，没配置时工具返回 `not_configured`，引导去 视频页 → 设置。
+- 成片在视频页播放；小砂糖只负责提交、查状态和保存，不在对话里内嵌播放器。
 
 ## 对话记录与 Markdown
 
@@ -49,7 +57,7 @@
 
 ## 权限与只读约束
 
-- AI 工具默认只读，例外只有四个：`generate_image` 把新图片写入应用目录并登记到相册（`Pictures/HomelabAI`，Android 10+）、日历工具增删改私人日历记录、界面自动化工具按用户明确要求点击/输入/返回其他应用、`upload_recent_photos` 把用户明确指定的照片上传到 Cloudreve；不要新增启停容器、提交下载、删除/重命名已有文件、修改设置之类的工具。
+- AI 工具默认只读，例外只有：`generate_image` / 修图结果把新图片写入相册（`Pictures/HomelabAI`，Android 10+）、`save_video_result` 把成片写入相册、`render_video` 提交用户明确确认过的渲染任务、`cancel_video_job` 按用户要求取消视频任务、日历工具增删改私人日历记录、界面自动化工具按用户明确要求点击/输入/返回其他应用、`upload_recent_photos` 把用户明确指定的照片上传到 Cloudreve；不要新增启停容器、提交下载、删除/重命名已有文件、修改设置之类的工具。
 - 相册权限：`READ_MEDIA_IMAGES`（Android 13+）/ `READ_EXTERNAL_STORAGE`（maxSdk 32），运行时入口在设置页「相册」卡片；不要引入 `MANAGE_EXTERNAL_STORAGE`。`find_photos` 无权限时返回 `need_permission`，属于正常状态而不是异常。
 - 文件搜索走 SAF 授权目录（`OpenDocumentTree` + `DocumentFile`），只读；不要默认引入 `MANAGE_EXTERNAL_STORAGE`。
 - `QUERY_ALL_PACKAGES` 用于列应用；`PACKAGE_USAGE_STATS` 是特殊权限，需要 AppOps / 系统设置页授权，不是运行时弹窗。

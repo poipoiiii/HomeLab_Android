@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -53,10 +54,15 @@ import com.poi.homelab.core.ui.theme.Danger
 import com.poi.homelab.core.ui.theme.Muted
 import com.poi.homelab.core.ui.theme.Success
 import com.poi.homelab.feature.watch.CbgTarget
+import com.poi.homelab.feature.watch.RailStation
+import com.poi.homelab.feature.watch.TrainTarget
+import com.poi.homelab.feature.watch.WatchKind
 import com.poi.homelab.feature.watch.WatchNotifier
 import com.poi.homelab.feature.watch.WatchRule
 import com.poi.homelab.feature.watch.cbgCategories
 import com.poi.homelab.feature.watch.intervalLabel
+import com.poi.homelab.feature.watch.seatLabel
+import com.poi.homelab.feature.watch.trainSeatOptions
 import com.poi.homelab.feature.watch.watchIntervalOptions
 import com.poi.homelab.navigation.UiState
 import java.text.SimpleDateFormat
@@ -72,6 +78,7 @@ fun WatchScreen(
     onToggleRule: (String, Boolean) -> Unit,
     onRunNow: (String?) -> Unit,
     onLoadTypes: (Int) -> Unit,
+    onLoadStations: () -> Unit,
 ) {
     val watch = state.watch
     val context = LocalContext.current
@@ -84,6 +91,9 @@ fun WatchScreen(
 
     LaunchedEffect(watch.rules.size) { notifyEnabled = WatchNotifier.canNotify(context) }
 
+    // 编辑页在同一个 Tab 里，返回键先退出编辑，而不是直接回首页
+    BackHandler(enabled = editorOpen) { editorOpen = false }
+
     if (editorOpen) {
         WatchRuleEditorScreen(
             initial = editorRule ?: WatchRule(target = defaultTarget(watch.types)),
@@ -91,7 +101,11 @@ fun WatchScreen(
             types = watch.types,
             typesLoading = watch.typesLoading,
             typesError = watch.typesError,
+            stations = watch.stations,
+            stationsLoading = watch.stationsLoading,
+            stationsError = watch.stationsError,
             onLoadTypes = onLoadTypes,
+            onLoadStations = onLoadStations,
             onBack = { editorOpen = false },
             onSave = { rule ->
                 onSaveRule(rule)
@@ -207,7 +221,7 @@ fun WatchScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(rule.displayTitle, style = MaterialTheme.typography.titleMedium)
-                            if (rule.target.ownerLabel.isNotBlank()) {
+                            if (!rule.isTrain && rule.target.ownerLabel.isNotBlank()) {
                                 Text(
                                     text = rule.target.ownerLabel,
                                     style = MaterialTheme.typography.bodySmall,
@@ -285,23 +299,38 @@ private fun WatchRuleEditorScreen(
     types: List<CbgTarget>,
     typesLoading: Boolean,
     typesError: String?,
+    stations: List<RailStation>,
+    stationsLoading: Boolean,
+    stationsError: String?,
     onLoadTypes: (Int) -> Unit,
+    onLoadStations: () -> Unit,
     onBack: () -> Unit,
     onSave: (WatchRule) -> Unit,
 ) {
     var draft by remember { mutableStateOf(initial) }
+    var kind by remember { mutableStateOf(initial.kind) }
     var kindId by remember { mutableStateOf(initial.target.kindId) }
+    var train by remember { mutableStateOf(initial.train) }
+    var dailyHour by remember { mutableStateOf(initial.dailyHour) }
     var minPrice by remember { mutableStateOf(initial.minPriceYuan?.toString().orEmpty()) }
     var maxPrice by remember { mutableStateOf(initial.maxPriceYuan?.toString().orEmpty()) }
     var title by remember { mutableStateOf(initial.title) }
     var pickerOpen by remember { mutableStateOf(false) }
+    var stationPicker by remember { mutableStateOf("") }
 
     LaunchedEffect(kindId) { onLoadTypes(kindId) }
+    LaunchedEffect(kind) { if (kind == WatchKind.TrainTicket) onLoadStations() }
 
-    val canSave = draft.target.equipType.isNotBlank()
+    val isTrain = kind == WatchKind.TrainTicket
+    val canSave = if (isTrain) train.valid else draft.target.equipType.isNotBlank()
     val commit: () -> Unit = {
         onSave(
             draft.copy(
+                kind = kind,
+                train = train,
+                dailyHour = dailyHour,
+                // 火车票规则不保留藏宝阁商品，避免卡片上出现「红 · 卫青」这类残留
+                target = if (isTrain) CbgTarget() else draft.target,
                 title = title.trim(),
                 minPriceYuan = minPrice.toIntOrNull(),
                 maxPriceYuan = maxPrice.toIntOrNull(),
@@ -337,128 +366,180 @@ private fun WatchRuleEditorScreen(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 40.dp),
         ) {
             item {
-                EditorLabel("商品类目")
+                EditorLabel("监控类型")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    cbgCategories.forEach { category ->
-                        Pill(
-                            text = category.label,
-                            selected = category.kindId == kindId,
-                            onClick = {
-                                if (kindId != category.kindId) {
-                                    kindId = category.kindId
-                                    draft = draft.copy(target = CbgTarget(kindId = category.kindId))
-                                }
-                            },
-                        )
-                    }
+                    Pill("藏宝阁商品", !isTrain, onClick = { kind = WatchKind.CbgEquip })
+                    Pill("火车票", isTrain, onClick = {
+                        kind = WatchKind.TrainTicket
+                        if (dailyHour == null) dailyHour = 8
+                    })
                 }
             }
 
-            item {
-                EditorLabel("商品", top = 20.dp)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
-                        .clickable { pickerOpen = true }
-                        .padding(horizontal = 14.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = draft.target.equipTypeName.ifBlank { "选择商品" },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (canSave) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                Muted
-                            },
-                        )
-                        Text(
-                            text = draft.target.ownerLabel.ifBlank {
-                                when {
-                                    typesLoading -> "正在读取列表…"
-                                    typesError != null -> "列表读取失败，重试请返回再进入"
-                                    else -> "点击选择要监控的商品"
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Muted,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
+            if (isTrain) {
+                item {
+                    EditorLabel("出发站", top = 20.dp)
+                    StationRow(train.fromName, "选择出发站") { stationPicker = "from" }
+                }
+                item {
+                    EditorLabel("到达站", top = 20.dp)
+                    StationRow(train.toName, "选择到达站") { stationPicker = "to" }
+                }
+                item {
+                    EditorLabel("席别", top = 20.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        trainSeatOptions.forEach { (code, label) ->
+                            Pill(label, train.seat == code, onClick = {
+                                train = train.copy(seat = code)
+                            })
+                        }
+                    }
+                }
+                item {
+                    EditorLabel("检测时间", top = 20.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(7, 8, 9, 10).forEach { hour ->
+                            Pill("%02d:00".format(hour), dailyHour == hour, onClick = {
+                                dailyHour = hour
+                            })
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("按间隔", dailyHour == null, onClick = { dailyHour = null })
                     }
                     Text(
-                        text = "选择",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
+                        text = "每天到这个点查一次最近假期的首日前一天和末日次日，两个日期各取最低价。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Muted,
+                        modifier = Modifier.padding(top = 10.dp),
                     )
                 }
-            }
-
-            item {
-                EditorLabel("价格区间（元，留空不限）", top = 20.dp)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = minPrice,
-                        onValueChange = { minPrice = it.filter(Char::isDigit).take(7) },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        label = { Text("最低") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                    Text("—", color = Muted)
-                    OutlinedTextField(
-                        value = maxPrice,
-                        onValueChange = { maxPrice = it.filter(Char::isDigit).take(7) },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        label = { Text("最高") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    )
-                }
-            }
-
-            item {
-                EditorLabel("公示期", top = 20.dp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Pill("不限", draft.fairShow == null, onClick = { draft = draft.copy(fairShow = null) })
-                    Pill("只看公示期", draft.fairShow == 1, onClick = { draft = draft.copy(fairShow = 1) })
-                    Pill("排除公示期", draft.fairShow == 0, onClick = { draft = draft.copy(fairShow = 0) })
-                }
-            }
-
-            item {
-                EditorLabel("星格", top = 20.dp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Pill("不限", draft.star == null, onClick = { draft = draft.copy(star = null) })
-                    (1..4).forEach { star ->
-                        Pill("$star" + "星", draft.star == star, onClick = {
-                            draft = draft.copy(star = star)
-                        })
+            } else {
+                item {
+                    EditorLabel("商品类目", top = 20.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        cbgCategories.forEach { category ->
+                            Pill(
+                                text = category.label,
+                                selected = category.kindId == kindId,
+                                onClick = {
+                                    if (kindId != category.kindId) {
+                                        kindId = category.kindId
+                                        draft = draft.copy(target = CbgTarget(kindId = category.kindId))
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
-            }
 
-            item {
-                EditorLabel("检测间隔", top = 20.dp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    watchIntervalOptions.take(4).forEach { minutes ->
-                        Pill(intervalLabel(minutes), draft.intervalMinutes == minutes, onClick = {
-                            draft = draft.copy(intervalMinutes = minutes)
-                        })
+                item {
+                    EditorLabel("商品", top = 20.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                            .clickable { pickerOpen = true }
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = draft.target.equipTypeName.ifBlank { "选择商品" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (canSave) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    Muted
+                                },
+                            )
+                            Text(
+                                text = draft.target.ownerLabel.ifBlank {
+                                    when {
+                                        typesLoading -> "正在读取列表…"
+                                        typesError != null -> "列表读取失败，重试请返回再进入"
+                                        else -> "点击选择要监控的商品"
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Muted,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                        Text(
+                            text = "选择",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    watchIntervalOptions.drop(4).forEach { minutes ->
-                        Pill(intervalLabel(minutes), draft.intervalMinutes == minutes, onClick = {
-                            draft = draft.copy(intervalMinutes = minutes)
-                        })
+
+                item {
+                    EditorLabel("价格区间（元，留空不限）", top = 20.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = minPrice,
+                            onValueChange = { minPrice = it.filter(Char::isDigit).take(7) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            label = { Text("最低") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                        Text("—", color = Muted)
+                        OutlinedTextField(
+                            value = maxPrice,
+                            onValueChange = { maxPrice = it.filter(Char::isDigit).take(7) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            label = { Text("最高") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                    }
+                }
+
+                item {
+                    EditorLabel("公示期", top = 20.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("不限", draft.fairShow == null, onClick = { draft = draft.copy(fairShow = null) })
+                        Pill("只看公示期", draft.fairShow == 1, onClick = { draft = draft.copy(fairShow = 1) })
+                        Pill("排除公示期", draft.fairShow == 0, onClick = { draft = draft.copy(fairShow = 0) })
+                    }
+                }
+
+                item {
+                    EditorLabel("星格", top = 20.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("不限", draft.star == null, onClick = { draft = draft.copy(star = null) })
+                        (1..4).forEach { star ->
+                            Pill("$star" + "星", draft.star == star, onClick = {
+                                draft = draft.copy(star = star)
+                            })
+                        }
+                    }
+                }
+
+                item {
+                    EditorLabel("检测间隔", top = 20.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        watchIntervalOptions.take(4).forEach { minutes ->
+                            Pill(intervalLabel(minutes), draft.intervalMinutes == minutes, onClick = {
+                                draft = draft.copy(intervalMinutes = minutes)
+                            })
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        watchIntervalOptions.drop(4).forEach { minutes ->
+                            Pill(intervalLabel(minutes), draft.intervalMinutes == minutes, onClick = {
+                                draft = draft.copy(intervalMinutes = minutes)
+                            })
+                        }
                     }
                 }
             }
@@ -473,7 +554,11 @@ private fun WatchRuleEditorScreen(
                     placeholder = { Text(draft.target.equipTypeName) },
                 )
                 Text(
-                    text = "价格按元填写，提交时换算为分；星格 1–4 星与藏宝阁网页筛选一致。",
+                    text = if (isTrain) {
+                        "每天按设定时间查询 12306，取最近假期首日前一天和末日次日的该席别最低价。"
+                    } else {
+                        "价格按元填写，提交时换算为分；星格 1–4 星与藏宝阁网页筛选一致。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = Muted,
                     modifier = Modifier.padding(top = 10.dp),
@@ -499,6 +584,50 @@ private fun WatchRuleEditorScreen(
                 pickerOpen = false
             },
             onDismiss = { pickerOpen = false },
+        )
+    }
+
+    if (stationPicker.isNotEmpty()) {
+        StationPicker(
+            title = if (stationPicker == "from") "选择出发站" else "选择到达站",
+            stations = stations,
+            loading = stationsLoading,
+            error = stationsError,
+            selected = if (stationPicker == "from") train.fromCode else train.toCode,
+            onSelect = { station ->
+                train = if (stationPicker == "from") {
+                    train.copy(fromCode = station.code, fromName = station.name)
+                } else {
+                    train.copy(toCode = station.code, toName = station.name)
+                }
+                stationPicker = ""
+            },
+            onDismiss = { stationPicker = "" },
+        )
+    }
+}
+
+@Composable
+private fun StationRow(name: String, placeholder: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = name.ifBlank { placeholder },
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (name.isBlank()) Muted else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "选择",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
         )
     }
 }
@@ -600,6 +729,102 @@ private fun CbgTypePicker(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    InlineAction("关闭", onDismiss)
+                }
+            }
+        }
+    }
+}
+
+/** 车站选择器：12306 的车站表有 3000 多条，只展示匹配的前 80 条。 */
+@Composable
+private fun StationPicker(
+    title: String,
+    stations: List<RailStation>,
+    loading: Boolean,
+    error: String?,
+    selected: String,
+    onSelect: (RailStation) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(stations, query) {
+        if (query.isBlank()) {
+            stations.take(60)
+        } else {
+            val keyword = query.trim()
+            stations.filter {
+                it.name.contains(keyword) ||
+                    it.pinyin.contains(keyword.lowercase()) ||
+                    it.code.equals(keyword, ignoreCase = true)
+            }.take(80)
+        }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    singleLine = true,
+                    label = { Text("搜索车站名或拼音") },
+                )
+                when {
+                    loading -> LoadingRow("正在读取车站列表…")
+                    error != null -> Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Danger,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                    filtered.isEmpty() -> Text(
+                        text = "没有匹配的车站",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Muted,
+                        modifier = Modifier.padding(top = 16.dp),
+                    )
+                    else -> LazyColumn(
+                        modifier = Modifier.heightIn(max = 400.dp).padding(top = 8.dp),
+                    ) {
+                        items(filtered.size) { index ->
+                            val station = filtered[index]
+                            val active = station.code == selected
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onSelect(station) }
+                                    .padding(horizontal = 10.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = station.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (active) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = station.code,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Muted,
+                                )
                             }
                         }
                     }

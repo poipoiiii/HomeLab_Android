@@ -207,6 +207,9 @@ data class WatchUiState(
     val typesError: String? = null,
     val running: Boolean = false,
     val runningRuleId: String? = null,
+    val stations: List<com.poi.homelab.feature.watch.RailStation> = emptyList(),
+    val stationsLoading: Boolean = false,
+    val stationsError: String? = null,
 )
 
 /** 行情页的状态：消息、财报日历、详情日 K 和 AI 分析。 */
@@ -520,6 +523,25 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                         watch = state.watch.copy(types = types, typesLoading = false, typesError = null),
                     )
                 }
+            }
+        }
+    }
+
+    fun loadRailStations() {
+        val current = _state.value.watch
+        if (current.stations.isNotEmpty() || current.stationsLoading) return
+        _state.update { it.copy(watch = it.watch.copy(stationsLoading = true, stationsError = null)) }
+        viewModelScope.launch {
+            val result = runCatching { app.rail.stations() }
+            _state.update { state ->
+                val list = result.getOrNull()
+                state.copy(
+                    watch = state.watch.copy(
+                        stations = list ?: state.watch.stations,
+                        stationsLoading = false,
+                        stationsError = if (list == null) "车站列表读取失败" else null,
+                    ),
+                )
             }
         }
     }
@@ -1853,6 +1875,9 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                     provider = provider,
                     ai = app.aiClient,
                     imageEdit = app.imageEdit,
+                    motion = app.motion,
+                    motionDirector = app.motionDirector,
+                    motionPlans = app.motionPlans,
                     onPhotos = { tool, uris ->
                         if (uris.isNotEmpty()) pendingPhotos[tool] = uris
                     },
@@ -1882,6 +1907,10 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
                                     "edit_photo" -> "正在让家里的 Qwen-Image-Edit 修图，可能要几十秒…"
                                     "batch_edit_photos" -> "正在提交批量修图任务…"
                                     "save_image_edit_result" -> "正在保存修图结果…"
+                                    "plan_video" -> "正在整理视频分镜方案…"
+                                    "render_video" -> "正在提交视频渲染任务…"
+                                    "save_video_result" -> "正在保存视频…"
+                                    "cancel_video_job" -> "正在取消视频任务…"
                                     else -> "调用 $tool…"
                                 }
                                 it.copy(aiStream = "", aiStatus = status)
@@ -1965,6 +1994,7 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             chatSaveMutex.withLock {
                 app.chat.clear()
                 app.aiAgent.clearHistory()
+                app.motionPlans.reset()
             }
         }
     }
@@ -2581,7 +2611,16 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             - edit_photo 返回 status=running 时，告诉用户任务还在跑，不要说完工；下次用户问起，用 list_image_edit_jobs 查，再用 save_image_edit_result 保存。
             - 工具返回 error 或 hint 时如实复述原因：没配置就引导去 设置 → 小砂糖 → AI 修图；离线就提示检查 Tailscale 和家里容器；结果过期就建议重新修。
             - 成功后用一两句话说明改了什么、已保存到相册；不要贴 base64、URL 或长 JSON。
-            你的查询默认只读；可以写数据的例外只有四个：把生成的图片保存到相册、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）、把用户明确指定的照片上传到 Cloudreve。不能修改或删除已有文件，不能启停容器，不能修改设置。
+            视频生成（AI 导演）：
+            - 用户说“做个视频 / 生成视频 / 剪个片子 / 导演一下 / 做个混剪”时，先调用 plan_video；不要直接调用 render_video，也不要用文字假装已经生成。
+            - plan_video 返回 status=ask 时，按 message 继续追问；用户说“你定”时就让导演直接出方案。
+            - 返回 status=plan 时，用精简的话告诉用户片名、主题、镜头数、预计时长，再挑 2 到 3 个关键镜头概括；最后问一句“确认后我就提交渲染”。
+            - 只有用户明确说“确认 / 可以 / 开始 / 就这个 / 生成吧”之后，才能调用 render_video；用户一开始就说“直接生成，不用再问”时，可以在方案出来后直接提交。用户要改方案时继续调用 plan_video，不要提交渲染。
+            - 用户要一个全新主题时给 plan_video 传 fresh=true；只是修改上一版时不要传。
+            - 提交后用 list_video_jobs 查进度；渲染要几分钟到几十分钟，不要说完工，也不要编造进度。
+            - 用户要保存成片时用 save_video_result；明确要求取消时用 cancel_video_job；没配置视频服务就引导去 视频页 → 设置。
+            - 不要把分镜方案 JSON 原样贴给用户，概括成自然语言即可。
+            你的查询默认只读；可以写数据的例外：把生成的图片或视频保存到相册、提交用户明确确认过的视频渲染任务、按用户明确要求取消视频任务、增删改私人日历记录、按用户明确要求操作其他应用的界面（点击/输入/返回）、把用户明确指定的照片上传到 Cloudreve。不能修改或删除已有文件，不能启停容器，不能修改设置。
             账本问题：
             - 用户问某个月/最近一个月的大额消费、支出排行、某笔之外还有什么时，调用 get_recent_expenses；不要把默认返回条数当成全部流水。
             - 明确月份就传 month=yyyy-MM；不确定时用本月。
@@ -2643,6 +2682,14 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
 
     fun setThemeMode(mode: String) {
         val updated = _state.value.settings.copy(themeMode = mode)
+        viewModelScope.launch {
+            app.settings.save(updated)
+            _state.update { it.copy(settings = updated) }
+        }
+    }
+
+    fun setThemeStyle(style: String) {
+        val updated = _state.value.settings.copy(themeStyle = style)
         viewModelScope.launch {
             app.settings.save(updated)
             _state.update { it.copy(settings = updated) }

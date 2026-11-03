@@ -196,7 +196,7 @@ fun CalendarScreen(
     ) {
         item {
             SectionHeader(
-                title = "日历",
+                title = "日程",
                 subtitle = "轻点选日期，长按直接新建；流水来自账本，只读展示",
                 action = {
                     if (month != currentMonth) {

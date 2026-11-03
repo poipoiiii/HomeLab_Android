@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -132,7 +133,7 @@ fun MotionScreen() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "视频",
+                text = "AI-Web-Video",
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.weight(1f),
             )
@@ -967,6 +968,7 @@ private fun MotionSettingsSheet(
                 label = { Text("Token") },
                 placeholder = { Text("与服务端 MOTION_TOKEN 一致") },
                 singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
                 shape = RoundedCornerShape(12.dp),
             )
 
