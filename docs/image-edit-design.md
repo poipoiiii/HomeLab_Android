@@ -460,18 +460,6 @@ huggingface-cli download Qwen/Qwen-Image-Edit-2511 --local-dir ./models/Qwen-Ima
 - vLLM 有 `/health` 时用它探活；版本不一致时退回 `/v1/models`。
 - 网关不写系统临时目录大片文件；结果、缩略图、SQLite、日志都在 `data/` 下，随部署目录迁移。
 
-### 4.15 提示词优化（可选，`PROMPT_OPTIMIZER`）
-
-动因：用户习惯说「给我 P 个腹肌」这类口语，扩散模型需要的是「改哪里、什么效果、保留什么」的具体描述。
-
-- 位置：网关 worker 内，`backend.generate()` 之前。改写失败、超时或模型缺失时静默回退用户原文，不影响出图。
-- 实现：`prompts.py` 的 `PromptOptimizer`，两种模式——`llama`（进程内 llama.cpp 读 GGUF，无需额外服务）与 `openai`（Ollama 等 OpenAI 兼容接口）。
-- 模型：`Qwen2.5-3B-Instruct Q4_K_M`（2.0GB），懒加载，CPU 4 线程，不占显存。
-- 提示词约束：只描述像素级修改，必须写清保留项（身份/五官/发型/姿势/服装/构图/背景），禁止新增用户没提的动作与场景，输出 40–120 字，附两条 few-shot。
-- 缓存：job 的 `cache_key` 仍按用户原文计算，避免同一原文因改写波动导致缓存失效。
-- 实测：改写一次约 16–23s；网关 RSS 约 3.6GB（其中 2.1GB 是 GGUF 的 mmap 文件页，可回收，匿名内存约 1.5GB）。
-- 调试：`POST /v1/prompts/optimize`（Bearer Token）直接返回改写结果与 `changed`。
-
 ## 5. 客户端设计
 
 ### 5.1 新增配置项

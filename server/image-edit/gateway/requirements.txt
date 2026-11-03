@@ -3,6 +3,3 @@ uvicorn[standard]==0.34.0
 httpx==0.28.1
 pillow==11.1.0
 pydantic==2.10.4
-
-# 可选：PROMPT_OPTIMIZER=llama 时进程内跑小模型，按需安装
-# pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu

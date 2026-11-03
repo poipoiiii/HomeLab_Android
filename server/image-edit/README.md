@@ -100,32 +100,6 @@ ComfyUI 已作为 `comfyui.service` 常驻（`127.0.0.1:8188`，已装 ComfyUI-G
 
 来源：`unsloth/Qwen-Image-Edit-2511-GGUF`、`Comfy-Org/Qwen-Image_ComfyUI`（`split_files/text_encoders`、`split_files/vae`）。下载在 WSL 内走 hf-mirror，落 ext4。
 
-### 4.2.1 提示词改写小模型（可选）
-
-`PROMPT_OPTIMIZER=llama` 时网关进程内用 llama.cpp 加载一个 3B 模型，把「给我 P 个腹肌」这类口语指令改写成扩散模型能执行的描述，再交给 ComfyUI。
-
-```text
-/home/ubuntu/models/rewrite-llm-q4.gguf     Qwen2.5-3B-Instruct Q4_K_M   2.0GB
-```
-
-```bash
-# 模型（hf-mirror）
-HF_ENDPOINT=https://hf-mirror.com /home/ubuntu/.venvs/img-edit/bin/python - <<'PY'
-from huggingface_hub import hf_hub_download
-import shutil
-p = hf_hub_download("Qwen/Qwen2.5-3B-Instruct-GGUF", "qwen2.5-3b-instruct-q4_k_m.gguf", cache_dir="/home/ubuntu/models/hf")
-shutil.copy(p, "/home/ubuntu/models/rewrite-llm-q4.gguf")
-PY
-
-# 运行时（CPU 版 wheel，无需编译）
-/home/ubuntu/.venvs/img-edit-gateway/bin/pip install llama-cpp-python \
-  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-
-# 启用
-sudo sed -i 's/^PROMPT_OPTIMIZER=.*/PROMPT_OPTIMIZER=llama/' /home/ubuntu/img-edit/.env
-sudo systemctl restart img-edit-gateway
-```
-
 ### 4.3 同步网关并建 venv
 
 ```bash
@@ -166,8 +140,6 @@ JOBS_DB=/home/ubuntu/img-edit/data/jobs.sqlite
 RESULT_TTL_HOURS=168
 JOB_RETENTION_DAYS=30
 RESULT_MAX_GB=20
-PROMPT_OPTIMIZER=llama
-PROMPT_LLM_GGUF=/home/ubuntu/models/rewrite-llm-q4.gguf
 ```
 
 `/etc/systemd/system/img-edit-gateway.service`：
@@ -216,12 +188,6 @@ curl -s http://127.0.0.1:8094/health
 | `JOB_TIMEOUT_SECONDS` | `600` | 单 job 执行超时（首次加载要给足） |
 | `RESULT_TTL_HOURS` / `JOB_RETENTION_DAYS` | `168` / `30` | 结果保留 7 天，元数据 30 天 |
 | `RESULT_MAX_GB` | `20` | 结果目录总容量上限 |
-| `PROMPT_OPTIMIZER` | `none` | `none` / `llama` / `openai`；开启后出图前先用小模型改写提示词 |
-| `PROMPT_LLM_GGUF` | `/home/ubuntu/models/rewrite-llm-q4.gguf` | `llama` 模式的模型文件 |
-| `PROMPT_LLM_THREADS` / `PROMPT_LLM_CTX` | `4` / `2048` | CPU 线程数与上下文长度；ComfyUI 在跑时别占满线程 |
-| `PROMPT_LLM_GPU_LAYERS` | `0` | 想借用显存填 `99`，会和 ComfyUI 抢 24GB |
-| `OPTIMIZER_URL` / `OPTIMIZER_MODEL` | Ollama 默认 | `openai` 模式的接口与模型名 |
-| `OPTIMIZER_MAX_CHARS` | `800` | 改写结果截断长度 |
 
 ## 6. API 摘要
 
@@ -239,7 +205,6 @@ curl -s http://127.0.0.1:8094/health
 | GET | `/v1/jobs/{id}/inputs/{i}.jpg` | 输入缩略图（≤320px，去 EXIF），支持 `?token=` |
 | GET | `/v1/results/{id}.png` | 结果图；`?max_side=320` 返回缩略图；支持 `?token=` |
 | POST | `/v1/edit` | 同步便捷接口（内部等 job，给 curl/调试用） |
-| POST | `/v1/prompts/optimize` | 调试用：`{"prompt":"..."}` 返回小模型改写后的提示词（`enabled` / `changed`） |
 
 要点：
 
@@ -274,13 +239,6 @@ curl -s http://127.0.0.1:8188/system_stats
 - **省显存**：ComfyUI 也在电源面板（`宿主机服务` 组）里，可以手动启停；网关本身很轻，不建议停。
 - `~/ComfyUI/output/img_edit/` 会累积每次出图的原图，ComfyUI 不自动清理，定期删。
 - 更换量化档（Q4→Q6/Q8）只改 `COMFY_UNET` 并放模型，然后重启网关；显存不够会明显变慢或 OOM。
-- **提示词改写**：`PROMPT_OPTIMIZER=llama` 时网关首个任务会懒加载 2GB GGUF（约 3s），之后常驻；改写一次约 15–25s（CPU 4 线程），比出图（约 250s）小得多。网关 RSS 约 1.5GB，其中模型是 mmap 的文件页，内存紧张时内核可回收，不会挤掉 ComfyUI。失败/超时会静默回退到用户原话。
-  ```bash
-  curl -s -X POST http://127.0.0.1:8094/v1/prompts/optimize \
-    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-    -d '{"prompt":"给我P个腹肌"}' | jq -r .prompt
-  ```
-  想彻底不占内存就把 `PROMPT_OPTIMIZER` 改回 `none` 再重启。
 
 ## 8. 网络
 

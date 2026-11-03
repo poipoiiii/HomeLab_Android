@@ -18,7 +18,6 @@ from PIL import Image
 import backend as backend_module
 from imageops import ImageError, decode_inputs
 from jobs import JobManager
-from prompts import optimizer
 from schemas import (
     BatchAck,
     BatchAckJob,
@@ -152,16 +151,6 @@ async def models() -> dict:
 
 
 # ---------------------------------------------------------------- 创建任务
-@app.post("/v1/prompts/optimize", dependencies=auth)
-async def optimize_prompt(payload: dict) -> dict:
-    """调试用：返回本地小模型改写后的提示词；未启用时原样返回。"""
-    prompt = str((payload or {}).get("prompt") or "").strip()
-    if not prompt:
-        raise HTTPException(400, detail="prompt 不能为空")
-    optimized = await asyncio.to_thread(optimizer.optimize, prompt)
-    return {"enabled": optimizer.enabled, "prompt": optimized, "changed": optimized != prompt}
-
-
 def _prepare(request: JobRequest):
     inputs = decode_inputs(request.images, MAX_INPUT_MB)
     return inputs

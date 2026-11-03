@@ -32,6 +32,7 @@
 - 上手文档：手机端 [image-edit-android.md](../image-edit-android.md)，服务端 [server/image-edit/README.md](../../server/image-edit/README.md)；接口与实测数据见 [image-edit-design.md](../image-edit-design.md)。
 - `feature/imageedit/`：`ImageEditClient`（HTTP）→ `ImageEditRepository`（压缩、提交、轮询、保存相册、Cloudreve）→ `ImageEditStore`（`saved_job_ids`，避免重复写相册）。服务端在 `server/image-edit/gateway`（FastAPI + SQLite job，异步 job + 队列），设计见 `docs/image-edit-design.md`。
 - 工具：`edit_photo`（1–3 张参考图，等结果并保存）、`batch_edit_photos`（2–8 张，只提交）、`list_image_edit_jobs`（只读）、`save_image_edit_result`（补存）。不要用 `generate_image` 假装修图。
+- 场景库：`feature/imageedit/ImageEditPresets.kt` 的 `IMAGE_EDIT_PRESETS` 是唯一来源（10 个场景：background / remove / outfit / portrait / body / style / light / product / restore / compose），每个场景有 `whenToUse` 和带 `{change}` 占位的 `template`。`edit_photo` / `batch_edit_photos` 的 `scenario` 参数由 `composeImageEditPrompt()` 套模板，AI 只传 20 字内的具体要求；场景不匹配时留空、自己写完整指令。系统提示里的场景表与这里必须同步，新增场景要同时改两处。
 - 独立页 `feature/imageedit/ui/ImageEditScreen.kt`（修图/任务两个 tab）与 `ImageEditSettingsScreen.kt`（地址、Token、模型、步数、最长边、自动保存、测试连接）；入口在设置页「小砂糖」分组、首页快捷面板、AI 页空状态，`AppRoot` 用 `state.imageEdit.open / settingsOpen` 做全屏 overlay。
 - 配置项 `imageEditUrl / imageEditToken / imageEditModel / imageEditSteps / imageEditMaxSide / imageEditAutoSave`，Token 只存本机 DataStore；图片只发给家里的网关，不经过对话服务商。
 - Coil 加载结果/输入缩略图时带不上 `Authorization` 头，`ImageEditRepository.thumbUrl` 会把 `?token=` 拼进 URL；服务端两个图片接口都接受 query token。

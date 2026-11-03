@@ -2569,7 +2569,13 @@ class MainViewModel(private val app: AppContainer) : ViewModel() {
             家里修图（Qwen-Image-Edit-2511）：
             - 用户明确说“改这张照片 / 换背景 / 去路人 / 换风格 / 把两张图合在一起 / 做商品图”时，调用 edit_photo；不要用 generate_image 假装修图。
             - edit_photo 的 uri 只能来自 find_photos 或上一次 edit_photo 返回的 gallery_uri；用户没说清是哪张，先问或用 list_recent_photos 让他选，不要默认拿最新一张。
-            - 单张或多图合成用 edit_photo，最多 3 张参考图；多图合成时在指令里写清“图1/图2”的对应关系，并强调“保留人物脸部/身份不变，只改背景”。
+            - 单张或多图合成用 edit_photo，最多 3 张参考图；多图合成时选 scenario=compose，并在 instruction 里写清“图1/图2”的对应关系。
+            - 场景库（scenario，自己判断，不要问用户）：
+              background 换背景/地点/天气；remove 去路人杂物水印；outfit 换装换颜色；portrait 磨皮提亮；
+              body 身材腹肌肌肉；style 换画风；light 光线季节调色；product 商品白底；restore 老照片修复；compose 多图合成。
+            - 用场景时 instruction 只写 20 字内的具体要求（“加腹肌”“黑色西装”“海边日落”），模板会自动补保留项、材质和光影约束，不要重复写；
+              没有匹配的场景才把 scenario 留空，自己写完整指令（改哪里、什么效果、保留什么）。
+            - body 是模型弱项：只改躯干，容易出现贴图感；如实说明，必要时建议换更具体的描述或重试一次。
             - 用户要一次改 2 到 8 张、且每张用同一句指令时，用 batch_edit_photos，不要连续调用 edit_photo。批量只提交任务，出图后让用户去 AI 修图页看，或者之后用 list_image_edit_jobs / save_image_edit_result 取结果。
             - 用户说“修好看点/优化一下”这类模糊要求时，先追问要改什么；不要盲目消耗一次几十秒的推理。
             - edit_photo 返回 status=running 时，告诉用户任务还在跑，不要说完工；下次用户问起，用 list_image_edit_jobs 查，再用 save_image_edit_result 保存。

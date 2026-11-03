@@ -29,6 +29,7 @@ import com.poi.homelab.feature.files.FileCategory
 import com.poi.homelab.feature.files.FileInsightRepository
 import com.poi.homelab.feature.imageedit.ImageEditOptions
 import com.poi.homelab.feature.imageedit.ImageEditRepository
+import com.poi.homelab.feature.imageedit.composeImageEditPrompt
 import com.poi.homelab.feature.files.FileInsights
 import com.poi.homelab.feature.lab.LabRepository
 import java.time.format.DateTimeFormatter
@@ -710,11 +711,18 @@ class AgentTools(
     @Tool(
         name = "edit_photo",
         description = "调用家里部署的 Qwen-Image-Edit-2511 按中文指令修改照片，成功后把结果保存到相册。" +
-            "适合换背景、去路人、换风格、多图合成、商品图；只应在用户明确要求修改某张照片时调用。",
+            "适合换背景、去杂物、换装、身材线条、轻修人像、换画风、换光线、商品图、老照片修复、多图合成；" +
+            "只应在用户明确要求修改某张照片时调用。" +
+            "先按意图从场景表里选 scenario，把用户的具体要求压缩成 20 字以内的短语传 instruction，" +
+            "不要自己重复写保留项；没有合适场景就把 scenario 留空，自己写完整指令。",
     )
     suspend fun editPhoto(
         @Param("要修改的照片 uri，来自 find_photos") uri: String,
-        @Param("修图指令，中文即可，例如：把背景换成傍晚海边，保留人物脸部和姿势不变") instruction: String,
+        @Param("具体要求，短句，例如：加腹肌 / 黑色西装 / 海边日落；或场景留空时的完整指令") instruction: String,
+        @Param(
+            "可选，场景 id：background / remove / outfit / portrait / body / style / light / product / restore / compose。" +
+                "留空表示不用模板。",
+        ) scenario: String? = null,
         @Param("可选，额外参考图 uri，最多 2 张，用英文逗号分隔") refs: String? = null,
         @Param("可选，输出尺寸如 1024x1024；留空按输入比例") size: String? = null,
         @Param("可选，随机种子；想复现上次结果时传上次返回的 seed") seed: Int? = null,
@@ -723,10 +731,11 @@ class AgentTools(
             add(uri)
             refs.orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }.forEach { add(it) }
         }
+        val prompt = composeImageEditPrompt(scenario, instruction)
         val job = imageEdit.submit(
             settings,
             targets,
-            instruction,
+            prompt,
             ImageEditOptions(size = size, steps = settings.imageEditSteps, seed = seed),
         )
         onPhotos("edit_photo", targets.filter { it.isNotBlank() })
@@ -739,6 +748,7 @@ class AgentTools(
                 "status" to done.status,
                 "job_id" to done.id,
                 "model" to settings.imageEditModel,
+                "scenario" to scenario,
                 "instruction" to instruction.take(120),
                 "size" to "${done.width}x${done.height}",
                 "elapsed_ms" to done.elapsedMs,
@@ -772,25 +782,29 @@ class AgentTools(
     @Tool(
         name = "batch_edit_photos",
         description = "一次把 2–8 张照片按同一句指令批量提交给家里的 Qwen-Image-Edit-2511。" +
-            "只提交任务，不等待出图；用户要去 AI 修图页看进度。多图合成请用 edit_photo 的 refs。",
+            "只提交任务，不等待出图；用户要去 AI 修图页看进度。多图合成请用 edit_photo 的 refs + scenario=compose。" +
+            "同样先选 scenario，instruction 只写具体要求。",
     )
     suspend fun batchEditPhotos(
         @Param("照片 uri 列表，英文逗号分隔，2–8 张，来自 find_photos") uris: String,
-        @Param("统一修图指令") instruction: String,
+        @Param("统一的具体要求，短句") instruction: String,
+        @Param("可选，场景 id，同 edit_photo；留空表示不用模板") scenario: String? = null,
         @Param("可选，输出尺寸如 1024x1024") size: String? = null,
         @Param("可选，随机种子；整批复用同一个 seed") seed: Int? = null,
     ): Map<String, Any?> = try {
         val targets = uris.split(',').map { it.trim() }.filter { it.isNotBlank() }
+        val prompt = composeImageEditPrompt(scenario, instruction)
         val ack = imageEdit.submitBatch(
             settings,
             targets,
-            instruction,
+            prompt,
             ImageEditOptions(size = size, steps = settings.imageEditSteps, seed = seed),
         )
         onPhotos("batch_edit_photos", targets)
         mapOf(
             "ok" to true,
             "batch_id" to ack.batchId,
+            "scenario" to scenario,
             "count" to ack.jobs.size,
             "jobs" to ack.jobs.map { mapOf("id" to it.id, "status" to it.status, "queue_position" to it.queuePosition) },
             "hint" to "已提交，去 AI 修图页或稍后用 list_image_edit_jobs 查看。",
