@@ -8,6 +8,7 @@ import com.poi.homelab.feature.ai.DeviceTools
 import com.poi.homelab.feature.bills.BillRepository
 import com.poi.homelab.feature.calendar.CalendarRepository
 import com.poi.homelab.feature.calendar.CalendarStore
+import com.poi.homelab.feature.device.MqttDeviceRepository
 import com.poi.homelab.feature.files.FileInsightRepository
 import com.poi.homelab.feature.homarr.HomarrRepository
 import com.poi.homelab.feature.home.ChecklistStore
@@ -67,6 +68,7 @@ class AppContainer(context: android.content.Context) {
         cloudreve,
     )
     val weather = WeatherRepository(http, json)
+    val device = MqttDeviceRepository(appContext, json)
     val market = MarketRepository(http, json)
     val motion = MotionRepository(MotionClient(http, json), deviceTools, appContext)
     val marketMind = MarketMindStore(appContext)

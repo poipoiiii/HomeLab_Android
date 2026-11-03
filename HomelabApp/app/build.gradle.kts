@@ -90,6 +90,8 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 设备接入：订阅家里 MQTT broker 的状态快照
+    implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
     // Homarr 看板磁贴图标（PNG/SVG），统一走本地 ImageLoader，不依赖 CDN 之外的 WebView
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-svg:2.7.0")

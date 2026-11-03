@@ -45,7 +45,7 @@
 ## 4. 项目速览（HomelabApp）
 
 - 包名 / `namespace` / `applicationId`：`com.poi.homelab`，源码 `HomelabApp/app/src/main/java/com/poi/homelab`；应用名 `poi's home`。
-- 源码按功能分包：`core/`（容器、设置、工具、通用 UI）、`feature/<功能>/`（`ai` `bills` `calendar` `homarr` `home` `imageedit` `lab` `photos` `settings` `notify` `automation` `files`）、`navigation/`、`preview/`；新增代码按功能放 `feature/<功能>/`，不要恢复平铺的 `data/`、`ui/screens/`。
+- 源码按功能分包：`core/`（容器、设置、工具、通用 UI）、`feature/<功能>/`（`ai` `bills` `calendar` `device` `homarr` `home` `imageedit` `lab` `photos` `settings` `notify` `automation` `files`）、`navigation/`、`preview/`；新增代码按功能放 `feature/<功能>/`，不要恢复平铺的 `data/`、`ui/screens/`。
 - 不要写死真实实例地址 / tailnet 域名 / 内网 IP / Token / API Key（`allowBackup=false`，Key 只存本机 DataStore，不进日志、文档、提交或截图）。
 - AI 走 Google ADK for Kotlin（`LlmAgent` + `InMemoryRunner`），工具用 KSP 生成的 `@Tool`，不要恢复手写 SSE / tool loop / JSON Schema。
 - 壁纸由 `AppRoot.WallpaperBackdrop` 全局铺底，不要在单页里再画；导航是左侧抽屉，没有底部导航。

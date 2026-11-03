@@ -14,7 +14,7 @@
 根包只保留 `HomelabApplication.kt` / `MainActivity.kt`：
 
 - `core/`：`AppContainer.kt`、`settings/SettingsStore.kt`、`util/`（格式化、相册/使用情况权限）、`ui/`（`theme/`、通用 `components/`、`InAppBrowserScreen.kt`）
-- `feature/<功能>/`：`ai`、`bills`、`calendar`、`homarr`、`home`、`imageedit`、`lab`、`photos`、`settings`、`notify`、`automation`；该功能的界面统一放 `ui/` 子包
+- `feature/<功能>/`：`ai`、`bills`、`calendar`、`device`、`homarr`、`home`、`imageedit`、`lab`、`photos`、`settings`、`notify`、`automation`；该功能的界面统一放 `ui/` 子包
 - `navigation/`：`AppRoot.kt`（导航骨架）与 `MainViewModel.kt`（全局 `UiState`、跨功能协调）
 - `preview/`：`ScreenPreviews.kt`
 
@@ -30,7 +30,9 @@
 
 ## 首页
 
-`feature/home/ui/HomeScreen.kt` 依次是 header → 「今天」清单 → Homarr 看板（未配置时回退快捷入口）→ `LabGlanceCard`（本月支出/收入/结余 + 容器状态合并成一张深色卡，`UiState.healthError` 单独承载失败原因）→ 「最近流水」（受 `showLedgerOnHome` 控制）。
+`feature/home/ui/HomeScreen.kt` 依次是 header → 行情（默认折叠）→ 「今天」清单 → Homarr 看板（未配置时回退快捷入口）→ 账本/日程并排 → 设备卡（`feature/device/ui/DeviceCard.kt`）→ `LabGlanceCard`（本月支出/收入/结余 + 容器状态合并成一张深色卡，`UiState.healthError` 单独承载失败原因）→ 「最近流水」（受 `showLedgerOnHome` 控制）。
+
+- 设备卡：订阅家里 MQTT broker 上 `home/<site>/stm32/<dev>/{state,telemetry,status}`，只读展示在线状态、uptime、LED、IP/RSSI。连接参数存独立 SharedPreferences `homelab_device`（`DevicePrefs`），入口是卡片右上角「配置」弹层，不写进 `AppSettings`；只在首页可见且处于前台时连接，退到后台断开。broker 账号、密码、地址不写死，由用户填。
 
 - Todo：列表存 `feature/home/TodoStore.kt`（DataStore `homelab_todo`，带 `initialized` 标记，未初始化时回填默认 3 项）；勾选状态仍由 `ChecklistStore` 按天保存。编辑用 `feature/home/ui/TodoEditorSheet.kt`（增删改 + 保存），勾选不会再改动全局背景色；首页卡片标题为「今天」。
 - 快捷入口：`feature/home/ui/QuickEntryPager.kt`，`HorizontalPager` 左右滑动切换卡片，配 `graphicsLayer` 缩放/淡出与动态圆点；只在没配置 Homarr 时作首页兜底，不要再恢复已删除的静态 `StackDeck`。

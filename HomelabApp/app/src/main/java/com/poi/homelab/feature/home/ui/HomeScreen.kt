@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -62,7 +63,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.poi.homelab.HomelabApplication
 import com.poi.homelab.core.ui.components.CreamCard
 import com.poi.homelab.core.ui.components.DarkCard
 import com.poi.homelab.core.ui.components.DarkStat
@@ -88,6 +93,9 @@ import com.poi.homelab.feature.automation.SplashSkip
 import com.poi.homelab.feature.bills.MonthStats
 import com.poi.homelab.feature.bills.ui.TransactionRow
 import com.poi.homelab.feature.calendar.CalendarEntry
+import com.poi.homelab.feature.device.DeviceUiState
+import com.poi.homelab.feature.device.DeviceViewModel
+import com.poi.homelab.feature.device.ui.DeviceCard
 import com.poi.homelab.feature.homarr.resolveHomarrUrl
 import com.poi.homelab.feature.homarr.stringValue
 import com.poi.homelab.feature.homarr.ui.HomarrBoardGrid
@@ -187,6 +195,23 @@ fun HomeScreen(
     // 行情默认折叠，折叠时不刷新；展开后按设置间隔轮询，退到后台就停
     val lifecycleOwner = LocalLifecycleOwner.current
     val inspection = LocalInspectionMode.current
+    // 设备卡片只在一张首页可见时连 broker；Preview 里没有 AppContainer，直接给空状态
+    val context = LocalContext.current
+    val appContainer = remember(inspection) {
+        if (inspection) null else (context.applicationContext as? HomelabApplication)?.container
+    }
+    val deviceVm = if (appContainer == null) {
+        null
+    } else {
+        viewModel<DeviceViewModel>(factory = DeviceViewModel.factory(appContainer.device))
+    }
+    val deviceState = deviceVm?.state?.collectAsStateWithLifecycle()?.value ?: DeviceUiState()
+    DisposableEffect(deviceVm) {
+        deviceVm?.onVisible()
+        onDispose { deviceVm?.onHidden() }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { deviceVm?.onVisible() }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { deviceVm?.onHidden() }
     val marketRefreshMs = settings.marketRefreshSeconds.coerceIn(10, 300) * 1000L
     LaunchedEffect(lifecycleOwner, inspection, marketRefreshMs, marketExpanded) {
         if (inspection || !marketExpanded) return@LaunchedEffect
@@ -271,6 +296,13 @@ fun HomeScreen(
                     }
                     ScheduleTile(state.calendarEntries, onOpenCalendar, Modifier.weight(1f))
                 }
+            }
+
+            item {
+                DeviceCard(
+                    state = deviceState,
+                    onSave = { deviceVm?.saveConfig(it) },
+                )
             }
 
             if (needsSetup && !offline) {
