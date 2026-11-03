@@ -37,22 +37,31 @@ android {
         buildConfigField("String", "DEFAULT_IMAGE_EDIT_TOKEN", "\"$defaultImageEditToken\"")
     }
 
+    // 本机 keystore 不入库；缺失时回退到 AGP 默认 debug 签名，保证干净 clone 也能构建
+    val localKeystore = rootProject.file("keystore/debug.keystore")
     signingConfigs {
-        create("local") {
-            storeFile = rootProject.file("keystore/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        if (localKeystore.exists()) {
+            create("local") {
+                storeFile = localKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
     buildTypes {
+        val signing = if (localKeystore.exists()) {
+            signingConfigs.getByName("local")
+        } else {
+            signingConfigs.getByName("debug")
+        }
         debug {
-            signingConfig = signingConfigs.getByName("local")
+            signingConfig = signing
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("local")
+            signingConfig = signing
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
