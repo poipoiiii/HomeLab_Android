@@ -43,6 +43,8 @@ class Backend(Protocol):
         seed: int | None,
         width: int,
         height: int,
+        workflow: str = "qwen_edit",
+        on_stage=None,
     ) -> Image.Image: ...
 
     def vram_used_mb(self) -> int | None: ...
@@ -60,10 +62,28 @@ class MockBackend:
     def status(self) -> str:
         return "mock"
 
-    def generate(self, images, prompt, *, steps, guidance, negative, seed, width, height):
-        base = images[0].convert("RGB").resize((width, height), Image.LANCZOS)
-        canvas = Image.new("RGB", (width, height), (250, 249, 245))
-        canvas.paste(base, (0, 0))
+    def generate(
+        self,
+        images,
+        prompt,
+        *,
+        steps,
+        guidance,
+        negative,
+        seed,
+        width,
+        height,
+        workflow="qwen_edit",
+        on_stage=None,
+    ):
+        if on_stage:
+            on_stage("sampling")
+        if images:
+            base = images[0].convert("RGB").resize((width, height), Image.LANCZOS)
+            canvas = Image.new("RGB", (width, height), (250, 249, 245))
+            canvas.paste(base, (0, 0))
+        else:
+            canvas = Image.new("RGB", (width, height), (250, 249, 245))
         overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
         draw.rectangle([0, height - 56, width, height], fill=(20, 20, 19, 190))
@@ -148,9 +168,26 @@ class DiffusersBackend:
         return self._pipe
 
     # ---------------------------------------------------------------- 推理
-    def generate(self, images, prompt, *, steps, guidance, negative, seed, width, height):
+    def generate(
+        self,
+        images,
+        prompt,
+        *,
+        steps,
+        guidance,
+        negative,
+        seed,
+        width,
+        height,
+        workflow="qwen_edit",
+        on_stage=None,
+    ):
         import torch
 
+        if workflow != "qwen_edit":
+            raise RuntimeError("diffusers 后端只支持 qwen_edit")
+        if on_stage:
+            on_stage("sampling")
         pipe = self._ensure()
         generator = None
         if seed is not None:
@@ -202,7 +239,18 @@ class ComfyUIBackend:
         self.sampler = os.getenv("COMFY_SAMPLER", "euler")
         self.scheduler = os.getenv("COMFY_SCHEDULER", "simple")
         self.timeout = int(os.getenv("COMFY_TIMEOUT", "900"))
+
+        # Krea2 文生图工作流（与 Qwen 编辑不同模型族，切换时需要 /free）
+        self.krea2_unet = os.getenv("KREA2_UNET", "Krea2-Moody-Mix-premium_int8_convrot.safetensors")
+        self.krea2_clip = os.getenv("KREA2_CLIP", "qwen3vl_4b_fp8_scaled.safetensors")
+        self.krea2_vae = os.getenv("KREA2_VAE", "qwen_image_vae.safetensors")
+        self.krea2_sampler = os.getenv("KREA2_SAMPLER", "euler_ancestral")
+        self.krea2_scheduler = os.getenv("KREA2_SCHEDULER", "beta")
+        self.krea2_timeout = int(os.getenv("KREA2_TIMEOUT", "300"))
+        self.queue_wait = int(os.getenv("COMFY_QUEUE_WAIT", "600"))
+
         self.client_id = uuid.uuid4().hex
+        self._last_workflow: str | None = None
         self._state = "warming_up"
         self._error = ""
 
@@ -253,31 +301,107 @@ class ComfyUIBackend:
         return self._state
 
     # ---------------------------------------------------------------- 推理
-    def generate(self, images, prompt, *, steps, guidance, negative, seed, width, height):
+    def generate(
+        self,
+        images,
+        prompt,
+        *,
+        steps,
+        guidance,
+        negative,
+        seed,
+        width,
+        height,
+        workflow="qwen_edit",
+        on_stage=None,
+    ):
+        if workflow not in {"qwen_edit", "krea2_t2i"}:
+            raise RuntimeError(f"不支持的工作流：{workflow}")
+        if workflow == "qwen_edit" and not images:
+            raise RuntimeError("改图至少需要 1 张照片")
+        if workflow == "krea2_t2i" and images:
+            raise RuntimeError("生图不接收照片")
+
+        notify = on_stage or (lambda stage: None)
         seed_value = int(seed) if seed is not None else random.randint(0, 2**31 - 1)
         if not self._probe():
+            notify("loading")
             self._wake()
-        timeout = httpx.Timeout(120.0, connect=10.0)
-        with httpx.Client(base_url=self.url, timeout=timeout) as client:
-            refs = [self._upload(client, image, index) for index, image in enumerate(images[:3])]
-            workflow = self._workflow(
-                prompt=prompt,
-                refs=refs,
-                steps=int(steps),
-                guidance=float(guidance),
-                seed=seed_value,
-                width=int(width),
-                height=int(height),
-            )
+
+        timeout_value = self.krea2_timeout if workflow == "krea2_t2i" else self.timeout
+        client_timeout = httpx.Timeout(max(120.0, timeout_value), connect=10.0)
+        with httpx.Client(base_url=self.url, timeout=client_timeout) as client:
+            self._wait_for_queue(client, notify)
+            self._switch_workflow(client, workflow, notify)
+
+            if workflow == "qwen_edit":
+                refs = [self._upload(client, image, index) for index, image in enumerate(images[:3])]
+                graph = self._qwen_workflow(
+                    prompt=prompt,
+                    refs=refs,
+                    steps=int(steps),
+                    guidance=float(guidance),
+                    seed=seed_value,
+                    width=int(width),
+                    height=int(height),
+                )
+            else:
+                graph = self._krea2_workflow(
+                    prompt=prompt,
+                    steps=int(steps),
+                    guidance=float(guidance),
+                    seed=seed_value,
+                    width=int(width),
+                    height=int(height),
+                )
+
+            notify("loading")
             response = client.post(
                 "/prompt",
-                json={"prompt": workflow, "client_id": self.client_id},
+                json={"prompt": graph, "client_id": self.client_id},
             )
             if response.status_code >= 400:
                 raise RuntimeError(f"ComfyUI 拒绝了任务：{response.text[:300]}")
             prompt_id = response.json()["prompt_id"]
-            log.info("ComfyUI 任务 %s（%dx%d, steps=%d, seed=%d）", prompt_id, width, height, steps, seed_value)
-            return self._wait(client, prompt_id)
+            self._last_workflow = workflow
+            notify("sampling")
+            log.info(
+                "ComfyUI 任务 %s（%s, %dx%d, steps=%d, seed=%d）",
+                prompt_id,
+                workflow,
+                width,
+                height,
+                steps,
+                seed_value,
+            )
+            return self._wait(client, prompt_id, timeout=timeout_value, notify=notify)
+
+    def _wait_for_queue(self, client: httpx.Client, notify) -> None:
+        """Gateway 是唯一提交者；外部脚本/视频任务在跑时先排队，避免抢卡。"""
+        deadline = time.time() + self.queue_wait
+        while True:
+            try:
+                queue = client.get("/queue").json()
+            except Exception:  # noqa: BLE001
+                return
+            running = len(queue.get("queue_running") or [])
+            pending = len(queue.get("queue_pending") or [])
+            if running == 0 and pending == 0:
+                return
+            notify("waiting_gpu")
+            if time.time() >= deadline:
+                raise TimeoutError(f"ComfyUI 队列一直有任务，等待超过 {self.queue_wait}s")
+            time.sleep(3)
+
+    def _switch_workflow(self, client: httpx.Client, workflow: str, notify) -> None:
+        if self._last_workflow and self._last_workflow != workflow:
+            notify("loading")
+            try:
+                client.post("/free", json={"unload_models": True, "free_memory": True})
+                log.info("切换工作流 %s → %s，已请求 ComfyUI 卸载模型", self._last_workflow, workflow)
+            except Exception as error:  # noqa: BLE001
+                log.warning("切换工作流时 /free 失败：%s", error)
+            self._last_workflow = None
 
     def _upload(self, client: httpx.Client, image: Image.Image, index: int) -> dict:
         buffer = io.BytesIO()
@@ -292,8 +416,8 @@ class ComfyUIBackend:
         info = response.json()
         return {"name": info.get("name") or name, "subfolder": info.get("subfolder") or ""}
 
-    def _wait(self, client: httpx.Client, prompt_id: str) -> Image.Image:
-        deadline = time.time() + self.timeout
+    def _wait(self, client: httpx.Client, prompt_id: str, timeout: int | None = None, notify=None) -> Image.Image:
+        deadline = time.time() + (timeout or self.timeout)
         while time.time() < deadline:
             history = client.get(f"/history/{prompt_id}").json()
             entry = history.get(prompt_id)
@@ -304,11 +428,13 @@ class ComfyUIBackend:
                 for output in (entry.get("outputs") or {}).values():
                     for item in output.get("images") or []:
                         if item.get("type") == "output":
+                            if notify:
+                                notify("decoding")
                             return self._fetch(client, item)
                 if status.get("completed"):
                     raise RuntimeError("ComfyUI 执行完成但没返回图片")
             time.sleep(2)
-        raise TimeoutError("ComfyUI 出图超时（%d 秒）" % self.timeout)
+        raise TimeoutError("ComfyUI 出图超时（%d 秒）" % (timeout or self.timeout))
 
     def _fetch(self, client: httpx.Client, item: dict) -> Image.Image:
         response = client.get(
@@ -322,7 +448,7 @@ class ComfyUIBackend:
         response.raise_for_status()
         return Image.open(io.BytesIO(response.content)).convert("RGB")
 
-    def _workflow(self, *, prompt, refs, steps, guidance, seed, width, height) -> dict:
+    def _qwen_workflow(self, *, prompt, refs, steps, guidance, seed, width, height) -> dict:
         # Qwen 的 VAE 是 8 倍下采样，潜空间尺寸必须是 8 的倍数
         width = max(256, min(2048, round(width / 8) * 8))
         height = max(256, min(2048, round(height / 8) * 8))
@@ -370,6 +496,79 @@ class ComfyUIBackend:
             encode[f"image{index + 1}"] = [node_id, 0]
         workflow["8"] = {"class_type": "TextEncodeQwenImageEditPlus", "inputs": encode}
         return workflow
+
+    def _krea2_workflow(self, *, prompt, steps, guidance, seed, width, height) -> dict:
+        # Krea2/Qwen VAE 都是 8 倍下采样；按 64 对齐，兼容常见竖屏/横屏比例
+        width = max(256, min(2048, round(width / 64) * 64))
+        height = max(256, min(2048, round(height / 64) * 64))
+        return {
+            "1": {
+                "class_type": "UNETLoader",
+                "inputs": {"unet_name": self.krea2_unet, "weight_dtype": "default"},
+            },
+            "2": {
+                "class_type": "CLIPLoader",
+                "inputs": {"clip_name": self.krea2_clip, "type": "krea2", "device": "default"},
+            },
+            "3": {"class_type": "VAELoader", "inputs": {"vae_name": self.krea2_vae}},
+            "4": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": prompt, "clip": ["2", 0]},
+            },
+            "5": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"text": "", "clip": ["2", 0]},
+            },
+            "6": {
+                "class_type": "EmptyLatentImage",
+                "inputs": {"width": width, "height": height, "batch_size": 1},
+            },
+            "7": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "model": ["1", 0],
+                    "seed": seed,
+                    "steps": steps,
+                    "cfg": guidance,
+                    "sampler_name": self.krea2_sampler,
+                    "scheduler": self.krea2_scheduler,
+                    "positive": ["4", 0],
+                    "negative": ["5", 0],
+                    "latent_image": ["6", 0],
+                    "denoise": 1.0,
+                },
+            },
+            "8": {
+                "class_type": "VAEDecodeTiled",
+                "inputs": {
+                    "samples": ["7", 0],
+                    "vae": ["3", 0],
+                    "tile_size": 512,
+                    "overlap": 64,
+                    "temporal_size": 64,
+                    "temporal_overlap": 8,
+                },
+            },
+            "9": {
+                "class_type": "SaveImage",
+                "inputs": {"images": ["8", 0], "filename_prefix": "img_edit/krea2"},
+            },
+        }
+
+    def comfy_queue(self) -> dict[str, int] | None:
+        try:
+            with httpx.Client(timeout=3.0) as client:
+                queue = client.get(self.url + "/queue").json()
+            return {
+                "running": len(queue.get("queue_running") or []),
+                "pending": len(queue.get("queue_pending") or []),
+            }
+        except Exception:  # noqa: BLE001
+            return None
+
+    @property
+    def loaded_workflow(self) -> str | None:
+        return self._last_workflow
 
     def vram_used_mb(self) -> int | None:
         try:

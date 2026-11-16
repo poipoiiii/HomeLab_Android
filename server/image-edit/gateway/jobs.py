@@ -15,6 +15,7 @@ from backend import Backend
 from imageops import Input, choose_size, parse_size, to_png
 from schemas import JobOut, JobRequest
 from storage import Storage, input_thumbs
+from workflows import WORKFLOWS
 
 log = logging.getLogger("jobs")
 
@@ -25,6 +26,8 @@ CACHE_SECONDS = 24 * 3600
 @dataclass
 class Queued:
     job_id: str
+    workflow: str
+    mode: str
     prompt: str
     negative: str
     steps: int
@@ -94,12 +97,25 @@ class JobManager:
         job_id = f"job_{time.strftime('%Y%m%d')}_{uuid.uuid4().hex[:8]}"
         prompt_hash = hashlib.sha256(request.prompt.encode("utf-8")).hexdigest()
         cache_key = self.cache_key(request, inputs)
+        workflow = request.workflow
+        mode = request.mode or WORKFLOWS[workflow]["mode"]
+        params = {
+            "workflow": workflow,
+            "mode": mode,
+            "steps": request.steps,
+            "size": request.size,
+            "guidance_scale": request.guidance_scale,
+        }
         self.storage.insert(
             {
                 "id": job_id,
                 "request_id": (request.request_id or "")[:64],
                 "batch_id": batch_id,
                 "label": request.display_label(),
+                "workflow": workflow,
+                "mode": mode,
+                "media_type": "image",
+                "params_json": json.dumps(params, ensure_ascii=False),
                 "status": "queued",
                 "stage": "queued",
                 "created_at": now,
@@ -117,6 +133,8 @@ class JobManager:
         )
         payload = Queued(
             job_id=job_id,
+            workflow=workflow,
+            mode=mode,
             prompt=request.prompt,
             negative=request.negative_prompt,
             steps=request.steps,
@@ -160,7 +178,10 @@ class JobManager:
     def cache_key(self, request: JobRequest, inputs: list[Input]) -> str:
         digest = hashlib.sha256()
         digest.update(request.prompt.encode("utf-8"))
-        digest.update(f"|{request.negative_prompt}|{request.steps}|{request.guidance_scale}|{request.size}".encode())
+        digest.update(
+            f"|{request.workflow}|{request.mode}|{request.negative_prompt}|"
+            f"{request.steps}|{request.guidance_scale}|{request.size}".encode()
+        )
         for item in inputs:
             digest.update(hashlib.sha256(item.jpeg).digest())
         return digest.hexdigest()
@@ -200,13 +221,31 @@ class JobManager:
             return
         started = int(time.time())
         self.storage.patch(item.job_id, status="running", stage="running", started_at=started)
-        width, height = parse_size(
-            item.size,
-            item.inputs[0].width,
-            item.inputs[0].height,
-            self.max_side,
+        if item.inputs:
+            base_width, base_height = item.inputs[0].width, item.inputs[0].height
+        else:
+            default_size = (WORKFLOWS.get(item.workflow) or {}).get("default_size") or "832x1216"
+            base_width, base_height = (int(part) for part in default_size.split("x", 1))
+        width, height = parse_size(item.size, base_width, base_height, self.max_side)
+        workflow_timeout = min(
+            self.timeout,
+            int((WORKFLOWS.get(item.workflow) or {}).get("timeout", self.timeout)),
         )
-        log.info("开始 %s（%dx%d, steps=%d）", item.job_id, width, height, item.steps)
+        log.info(
+            "开始 %s（%s, %dx%d, steps=%d）",
+            item.job_id,
+            item.workflow,
+            width,
+            height,
+            item.steps,
+        )
+
+        def set_stage(stage: str) -> None:
+            try:
+                self.storage.patch(item.job_id, stage=stage)
+            except Exception:  # noqa: BLE001
+                pass
+
         try:
             image = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -219,11 +258,13 @@ class JobManager:
                     seed=item.seed,
                     width=width,
                     height=height,
+                    workflow=item.workflow,
+                    on_stage=set_stage,
                 ),
-                timeout=self.timeout,
+                timeout=workflow_timeout,
             )
         except asyncio.TimeoutError:
-            self._finish_failed(item.job_id, "backend_timeout", f"超过 {self.timeout}s 未完成")
+            self._finish_failed(item.job_id, "backend_timeout", f"超过 {workflow_timeout}s 未完成")
             return
         except asyncio.CancelledError:
             raise
@@ -249,7 +290,7 @@ class JobManager:
             cached=0,
             **saved,
         )
-        log.info("完成 %s，用时 %ds", item.job_id, finished - started)
+        log.info("完成 %s（%s），用时 %ds", item.job_id, item.workflow, finished - started)
 
     def _finish_failed(self, job_id: str, code: str, message: str) -> None:
         self.storage.patch(
@@ -274,6 +315,9 @@ class JobManager:
             id=row["id"],
             batch_id=row["batch_id"],
             label=row["label"] or "",
+            workflow=row["workflow"] if "workflow" in row.keys() else "qwen_edit",
+            mode=row["mode"] if "mode" in row.keys() else "edit",
+            media_type=row["media_type"] if "media_type" in row.keys() else "image",
             status=status,
             stage=row["stage"] or "queued",
             queue_position=self.storage.position(row["id"]) if status == "queued" else 0,

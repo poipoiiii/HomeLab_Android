@@ -15,6 +15,10 @@ create table if not exists jobs (
     request_id    text,
     batch_id      text,
     label         text,
+    workflow      text not null default 'qwen_edit',
+    mode          text not null default 'edit',
+    media_type    text not null default 'image',
+    params_json   text not null default '{}',
     status        text not null,
     stage         text not null default 'queued',
     created_at    integer not null,
@@ -66,6 +70,20 @@ class Storage:
         os.makedirs(self.input_dir, exist_ok=True)
         with self.connect() as con:
             con.executescript(SCHEMA)
+            self._migrate(con)
+
+    def _migrate(self, con: sqlite3.Connection) -> None:
+        """增量列；旧库不重建，已有 job 默认按 qwen_edit 处理。"""
+        columns = {row[1] for row in con.execute("pragma table_info(jobs)")}
+        additions = {
+            "workflow": "text not null default 'qwen_edit'",
+            "mode": "text not null default 'edit'",
+            "media_type": "text not null default 'image'",
+            "params_json": "text not null default '{}'",
+        }
+        for name, ddl in additions.items():
+            if name not in columns:
+                con.execute(f"alter table jobs add column {name} {ddl}")
 
     # ---------------------------------------------------------------- 写入
     def insert(self, job: dict[str, Any]) -> None:

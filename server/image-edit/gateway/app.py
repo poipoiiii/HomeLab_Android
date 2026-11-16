@@ -30,6 +30,7 @@ from schemas import (
     JobsPage,
 )
 from storage import Storage
+from workflows import WORKFLOWS, workflows_payload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,6 +125,10 @@ async def health() -> HealthOut:
         status = "warming_up"
     else:
         status = "ok"
+    comfy_queue = backend.comfy_queue() if hasattr(backend, "comfy_queue") else None
+    gpu_busy = bool(
+        comfy_queue and (comfy_queue.get("running") or comfy_queue.get("pending"))
+    )
     return HealthOut(
         status=status,
         model=backend.model,
@@ -131,6 +136,10 @@ async def health() -> HealthOut:
         queue={"running": running, "queued": queued, "capacity": MAX_QUEUE},
         gpu_vram_used_mb=backend.vram_used_mb(),
         detail=state,
+        workflows=list(WORKFLOWS),
+        comfy_queue=comfy_queue,
+        loaded_workflow=getattr(backend, "loaded_workflow", None),
+        gpu_busy=gpu_busy,
     )
 
 
@@ -145,9 +154,16 @@ async def models() -> dict:
                 "max_batch": MAX_BATCH,
                 "sizes": [[1024, 1024], [1328, 1328], [1536, 1024]],
                 "guidance_distilled": True,
+                "workflows": list(WORKFLOWS),
             }
         ]
     }
+
+
+@app.get("/v1/workflows", dependencies=auth)
+async def workflows() -> dict:
+    """App 启动/设置页读取的能力清单；不要求每次任务都调。"""
+    return {"workflows": workflows_payload()}
 
 
 # ---------------------------------------------------------------- 创建任务
@@ -189,6 +205,8 @@ async def create_job(request: JobRequest) -> CreateAck:
 
 @app.post("/v1/jobs/batch", response_model=BatchAck, status_code=202, dependencies=auth)
 async def create_batch(payload: BatchRequest) -> BatchAck:
+    if any(item.workflow != "qwen_edit" for item in payload.jobs):
+        raise HTTPException(400, detail="批量只支持 qwen_edit")
     if manager.capacity_left() < len(payload.jobs):
         raise HTTPException(429, detail="队列容量不足，整批未入队")
     prepared = [(item, _prepare(item)) for item in payload.jobs]
