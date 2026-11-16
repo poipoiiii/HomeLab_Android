@@ -116,7 +116,7 @@ ComfyUI 已作为 `comfyui.service` 常驻（`127.0.0.1:8188`，已装 ComfyUI-G
 
 ```bash
 rsync -a --delete --exclude '__pycache__' \
-  ~/homelab_android/server/image-edit/gateway/ /home/ubuntu/img-edit/gateway/
+  /mnt/d/ubuntu_/homelab_android/server/image-edit/gateway/ /home/ubuntu/img-edit/gateway/
 
 python3 -m venv /home/ubuntu/.venvs/img-edit-gateway
 /home/ubuntu/.venvs/img-edit-gateway/bin/pip install -r /home/ubuntu/img-edit/gateway/requirements.txt
@@ -277,13 +277,15 @@ curl -s http://127.0.0.1:8094/health
 
 # 更新代码后
 rsync -a --delete --exclude '__pycache__' \
-  ~/homelab_android/server/image-edit/gateway/ /home/ubuntu/img-edit/gateway/
+  /mnt/d/ubuntu_/homelab_android/server/image-edit/gateway/ /home/ubuntu/img-edit/gateway/
 systemctl restart img-edit-gateway
 
 # ComfyUI
 systemctl status comfyui
 curl -s http://127.0.0.1:8188/system_stats
 ```
+
+> 本仓库在 Windows `D:\ubuntu_\homelab_android`；WSL 里对应 `/mnt/d/ubuntu_/homelab_android`。如果 WSL 里另有一份 clone，把命令里的 `/mnt/d/...` 换成 `~/homelab_android/...`。
 
 - 数据目录：`/home/ubuntu/img-edit/data`（结果/输入缩略图/SQLite）。清理策略由网关定时执行，也可手工删 `results/` 里的旧文件。
 - **闲置自动停**：`img-edit-comfy-idle.timer` 每分钟跑一次 `img-edit-comfy-idle.sh`，ComfyUI 连续 30 分钟没有修图活动（网关 job、ComfyUI 队列、输出目录、serve.log 都算活动）就 `systemctl stop comfyui`，释放约 16GB 显存；有任务在跑/排队时不动。改时长：`systemctl edit img-edit-comfy-idle.service` 覆盖 `IDLE_MINUTES=30`。
@@ -454,7 +456,7 @@ BACKEND=mock IMAGE_EDIT_TOKEN=debug-token python3 -m uvicorn app:app --host 127.
 ```bash
 # 同步 + 备份 + 重启
 rsync -a --delete --exclude '__pycache__' \
-  ~/homelab_android/server/image-edit/gateway/ /home/ubuntu/img-edit/gateway/
+  /mnt/d/ubuntu_/homelab_android/server/image-edit/gateway/ /home/ubuntu/img-edit/gateway/
 cp /home/ubuntu/img-edit/data/jobs.sqlite /home/ubuntu/img-edit/data/jobs.sqlite.bak-$(date +%Y%m%d%H%M)
 sudo systemctl restart img-edit-gateway
 curl -s http://127.0.0.1:8094/health

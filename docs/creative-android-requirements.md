@@ -104,7 +104,7 @@
 
 - 运行在手机端，复用现有小砂糖 AI 配置（服务商、模型、Key）。
 - 不新增 Key、不新增设置页；不把 AI Key 发给 8094。
-- 8094 仍用现有 `IMAGE_EDIT_TOKEN`；复用 `ImageEditPrefs` 的 `serverUrl` / `token`，不要再存一份。
+- 8094 仍用现有 `IMAGE_EDIT_TOKEN`；复用 `AppSettings.imageEditUrl` / `imageEditToken`（设置 → 小砂糖 → AI 修图 → 服务设置），不要再存一份。
 - Agent 输入只包含：
   - 用户描述原文；
   - `has_main` / `has_ref`；
@@ -162,8 +162,8 @@
 
 ### 7.1 地址与鉴权
 
-- Base URL：`ImageEditPrefs.url(context)`，例如 `http://100.x.y.z:8094`；不要带 `/v1`。
-- Token：`ImageEditPrefs.token(context)`，`Authorization: Bearer <token>`。
+- Base URL：`AppSettings.imageEditUrl`（`SettingsStore` / `AppContainer.settings`），例如 `http://100.x.y.z:8094`；不要带 `/v1`。
+- Token：`AppSettings.imageEditToken`，`Authorization: Bearer <token>`。
 - 结果/缩略图 URL 由 Coil 直接加载时用 `?token=`（和现有修图页一致）。
 - AI 服务商 Key 只用于 Agent，不用于 8094。
 
@@ -355,7 +355,7 @@
 
 - 复用现有：
   - AI 服务商/Key：设置 → 小砂糖 → AI 配置。
-  - 8094 地址/Token：设置 → 小砂糖 → AI 修图 → 服务设置（`ImageEditPrefs`）。
+  - 8094 地址/Token：设置 → 小砂糖 → AI 修图 → 服务设置（`AppSettings.imageEditUrl` / `imageEditToken`）。
 - 不新增 Key、不新增网关地址、不复制 Token。
 - 照片只发 8094；Agent 请求不包含照片字节/缩略图/EXIF。
 - 日志只记录 `job_id`、`workflow`、`status/stage`、`elapsed`、`prompt_len`；不打印 prompt 原文、base64、Token。
@@ -378,7 +378,7 @@ feature/creative/
    └─ CreativeHistory.kt
 ```
 
-- 复用 `ImageEditPrefs`、`ImageEditClient` 的 HTTP/错误处理模式、`ImageEditRepository` 的轮询/自动保存逻辑；不要改现有修图页的行为。
+- 复用 `AppSettings.imageEditUrl` / `imageEditToken`、`ImageEditClient` 的 HTTP/错误处理模式、`ImageEditRepository` 的轮询/自动保存逻辑；不要改现有修图页的行为。
 - 导航在 `AppRoot` 增加抽屉入口；`MainViewModel` 如需跨页状态按现有模式处理。
 - Agent 用现有 ADK `LlmAgent` + `InMemoryRunner`，或复用现有 AI 客户端；不要手写新的 SSE/tool loop。
 - 图片选择用系统 Photo Picker；保存用 MediaStore；参考现有 `feature/imageedit` 实现。
